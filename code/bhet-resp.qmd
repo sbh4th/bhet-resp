@@ -1,0 +1,259 @@
+---
+title: "First Pass at Respiratory"
+author: Sam Harper
+date: today
+format: 
+  html:
+    theme: materia
+    code-fold: true
+    toc: true
+---
+```{r setup, message = F}
+library(here)
+library(tidyverse)
+library(tidybayes)
+library(haven)
+library(modeldb)
+library(kableExtra)
+library(brms)
+library(cmdstanr)
+library(modelr)
+library(osfr)
+library(modelsummary)
+library(bayesplot)
+library(patchwork)
+library(marginaleffects)
+
+# Use the cmdstanr backend for Stan
+# You need to install the cmdstanr package first
+# (https://mc-stan.org/cmdstanr/) and then run cmdstanr::install_cmdstan() to
+# install cmdstan on your computer.
+options(mc.cores = 4,
+        brms.backend = "cmdstanr")
+```
+
+First bring in the BHET master data and restrict to just wave, treatment, and respiratory outcomes
+
+```{r d1, message=F}
+## 1 Read in dataset, limit to resp vars ----
+d <- read_dta(here("data-clean",
+  "BHET_master_data_6Sep2023.dta"), 
+  col_select= c(hh_id, ptc_id, wave, ID_VILLAGE, 
+                ban_status_2019, ban_status_2020, 
+                ban_status_2021, ban_status_no, 
+                ban_status_composite,
+                freq_cough, freq_phlegm,
+                freq_wheezing, freq_breath,
+                freq_no_chest)) 
+
+# define main outcome
+d1 <- d %>% drop_na() %>%
+  mutate(resp = if_else(
+    freq_cough < 3 |
+    freq_phlegm < 3 |
+    freq_wheezing < 3 |
+    freq_breath < 3 |
+    freq_no_chest < 3, 1, 0),
+    year = if_else(wave==1, 2018, 
+      if_else(wave==2, 2019,
+        if_else(wave==4, 2021, 0))),
+    cohort_year = if_else(
+      ban_status_composite==1, 2019, 
+      if_else(ban_status_composite==2, 2020, 
+              if_else(ban_status_composite==3, 2021, 2022))),
+    treat = ifelse(year >= cohort_year, 1, 0),
+    cohort_year = ifelse(cohort_year == 2022,-Inf, 
+                         cohort_year)) %>%
+  # relabel last cohort year 
+  # treatment cohort dummies
+  add_dummy_variables(cohort_year, 
+    values=c(-Inf,2019,2020,2021), 
+    remove_original = F) %>%
+  # wave dummies
+  add_dummy_variables(year, 
+    values=c(2018,2019,2021), remove_original = F)
+
+kable(head(d1)) %>% kable_styling()
+```
+Let's look at some simple frequencies for the self-reported respiratory outcomes:
+
+```{r d1p, message =F, warning = F, include=F}
+# p_cough <- 
+  d1 %>% 
+  ggplot(aes(y = as_factor(freq_cough))) + 
+  geom_bar(aes(x = (..count..)/sum(..count..))) +
+  labs(y = "", x = "Proportion")
+
+#p_phlegm <- 
+  d1 %>% 
+  ggplot(aes(y = as_factor(freq_phlegm))) + 
+  geom_bar(aes(x = (..count..)/sum(..count..))) +
+  labs(y = "", x = "Proportion")
+
+#p_wheeze <- 
+  d1 %>% 
+  ggplot(aes(y = as_factor(freq_wheezing))) + 
+  geom_bar(aes(x = (..count..)/sum(..count..))) +
+  labs(y = "", x = "Proportion")
+
+# p_breath <- 
+  d1 %>% 
+  ggplot(aes(y = as_factor(freq_breath))) + 
+  geom_bar(aes(x = (..count..)/sum(..count..))) +
+  labs(y = "", x = "Proportion")
+
+#p_chest <- 
+  d1 %>% 
+  ggplot(aes(y = as_factor(freq_no_chest))) + 
+  geom_bar(aes(x = (..count..)/sum(..count..))) +
+  labs(y = "", x = "Proportion")
+
+```
+
+
+```{r d1f}
+vars <- c("freq_cough", "freq_phlegm",
+  "freq_wheezing", "freq_breath",
+  "freq_no_chest")
+
+map(vars, ~ 
+    d1 %>% 
+      select(starts_with("freq")) %>%
+      group_by(across(all_of(.x))) %>%
+      tally()
+   )
+```
+
+I created a simple outcome based on categorizing those reporting either `Most days a week` or `Several days a week` (and `No good days` or `A few good days` for frequency of days with chest trouble). Effectively, if you reported trouble on any of these, you are classified has having some self-reported respiratory problems. Here is the overall breakdown, with around 50% of our population reporting some respiratory problems. 
+
+```{r d2o, message = F}
+d1 %>% group_by(resp) %>% tally()
+```
+
+Okay, now some simple DiD models to look at the impact of the policy. I am using the extended TWFE set up (but in a Bayesian framework). The model ends up looking something like this:
+
+$$logit(Y_{it}) = \alpha + \sum_{r=q}^{T} \beta_{r} d_{r} + \sum_{s=r}^{T} \gamma_{s} fs_{t}+ \sum_{r=q}^{T} \sum_{s=r}^{T} \tau_{rt} (d_{r} \times fs_{t}) + \varepsilon_{it}$$ 
+
+Effectively, we are saturating the regression with interactions between treated cohorts and time, such that the $\tau_{rt}$ are estimates of each group-time ATT.
+
+I used informative, but weak priors for the intercept and the treatment effects, which are skeptical of large effect sizes. The plots below just show the prior distribution of the parameters for the treatment effects, and you can see that we are betting that it is extremely unlikely that the policy would change the prevalence of poor respiratory health by more than 50 *percentage points* (i.e., on the absolute probability scale, not percent).
+
+```{r priors, cache=T}
+# limit sample
+
+d2 <- d1 %>% 
+  select(starts_with(c("year","cohort")), 
+  "ID_VILLAGE","resp","treat") %>%
+  
+  # limit to complete cases
+  drop_na() %>% 
+  
+  # create unique continuous village Id
+  group_by(ID_VILLAGE) %>%
+  mutate(v_id = cur_group_id()) %>%
+  ungroup()
+
+## load brms model
+b2 <- readRDS(here("code/fits", 
+  "bhet-resp-b2.rds"))
+
+## extract prior draws
+pd <- prior_draws(b2) %>%
+  # rescale to absolute probabilities
+  mutate(pd0 = inv_logit_scaled(Intercept),
+         pd1 = inv_logit_scaled(Intercept + b)) %>%
+  # treatment effect
+  mutate(diff = pd1 - pd0)
+
+## plot for intercept
+plot_pd1 <- pd %>%
+  ggplot(aes(x = pd1)) + 
+  stat_halfeye(color= "black", fill =  '#1b9e77') +
+  labs(x = "Probability of poor lung health", 
+    y = NULL, subtitle = "Prior for Intercept") +
+  theme_classic()
+
+## plot for treatment effect
+plot_pdd <- pd %>%
+  ggplot(aes(x = diff)) + 
+  stat_halfeye(color= "black", fill =  '#d95f02') +
+  labs(x = "Difference in treated vs. control", 
+    y = NULL, subtitle = "Prior for treatment effect") +
+  theme_classic()
+
+# Combined plot for priors
+priors_lung <- (plot_pd1 | plot_pdd) +
+  plot_annotation(
+    title = "Priors for poor lung symptoms",
+                  theme = theme_classic())
+priors_lung
+```
+
+The basic model results are here:
+```{r b2est, cache=T}
+print(b2)
+```
+The ATTs are the product terms, but on the log-odds scale and not very intuitive. Instead, let's look at the marginal effects. I only did the simple averaging of ATTs and the cohort-specific averaging for now. 
+
+```{r me}
+bme_pred <- predictions(
+  b2, 
+  newdata   = subset(d2, treat==1),
+  variables = "treat", 
+  by        = "treat"
+  )
+
+bme_avg <- slopes(
+  b2, 
+  newdata   = subset(d2, treat==1),
+  variables = "treat", 
+  by        = "treat"
+  )
+
+bti <- data.frame(
+  term = paste("ATT(", bme_avg$term, ")", sep = ""),
+  estimate = bme_avg$estimate,
+  conf.low = bme_avg$conf.low,
+  conf.high = bme_avg$conf.high,
+  std.error = abs(bme_avg$conf.high - 
+                    bme_avg$conf.low) / (2 * 1.96)
+)
+
+gl <- data.frame()
+
+betwfe_me_avg <- list(tidy = bti, glance = gl)
+class(betwfe_me_avg) <- "modelsummary_list"
+
+modelsummary(list("Bayesian Simple Average" = betwfe_me_avg),
+  shape = term ~ model + statistic, 
+  statistic = c("({std.error})", "conf.int"),
+  gof_omit ='._*')
+```
+
+This suggests a 7.6 percentage point decrease in the probability of self-reported lung function as a result of the policy. The cohort-specific ATTs suggest mostly consistent impacts for early- and later-treated.
+
+```{r me2}
+bme_c <- slopes(
+  b2, 
+  newdata   = subset(d2, treat & cohort_year),
+  variables = "treat", 
+  by        = "cohort_year"
+  )
+
+bti_c <- data.frame(
+  term = paste("ATT(g", bme_c$cohort_year, ")", sep=""), 
+  estimate = bme_c$estimate,
+  conf.low = bme_c$conf.low,
+  conf.high = bme_c$conf.high,
+  std.error = abs(bme_c$conf.high - 
+                    bme_c$conf.low) / (2 * 1.96)
+)
+
+betwfe_me_c <- list(tidy = bti_c, glance = gl)
+class(betwfe_me_c) <- "modelsummary_list"
+
+modelsummary(list("Bayesian Cohort Average" = betwfe_me_c),
+  shape = term ~ model + statistic, 
+  statistic = c("({std.error})", "conf.int"),
+  gof_omit ='._*')
+```
