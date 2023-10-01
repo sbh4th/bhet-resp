@@ -3,7 +3,7 @@
 #  input:    bhet-master
 #  output:   
 #  project:  BHET
-#  author:   sam harper \ 2023-09-28
+#  author:   sam harper \ 2023-09-30
 
 
 ##  0 Load needed packages ----
@@ -11,6 +11,7 @@ library(here)
 library(tidyverse)
 library(tidybayes)
 library(haven)
+library(kableExtra)
 library(modeldb)
 library(brms)
 library(cmdstanr)
@@ -19,6 +20,7 @@ library(osfr)
 library(modelsummary)
 library(bayesplot)
 library(patchwork)
+library(marginaleffects)
 
 # Use the cmdstanr backend for Stan
 # You need to install the cmdstanr package first
@@ -43,7 +45,8 @@ u2s_fits <- osf_retrieve_node("cv9qg")
 
 
 ## 1 Read in dataset, limit to resp vars ----
-d <- read_dta("data-clean/BHET_master_data_6Sep2023.dta", 
+d <- read_dta(here("data-clean", 
+                   "BHET_master_data_6Sep2023.dta"), 
   col_select= c(hh_id, ptc_id, wave, ID_VILLAGE, 
                 ban_status_2019, ban_status_2020, 
                 ban_status_2021, ban_status_no, 
@@ -100,12 +103,7 @@ map(vars, ~
       kbl() %>% kable_styling()
    )
 
-map(vars, ~ 
-    d1 %>% 
-      select(starts_with("freq")) %>%
-      group_by(across(all_of(.x))) %>%
-      tally()
-   )
+w
 
 d1 %>% ggplot(aes(y = as_factor(freq_cough))) + 
   geom_bar(aes(x = (..count..)/sum(..count..))) +
@@ -209,6 +207,11 @@ priors_lung <- (plot_pd1 | plot_pdd) +
                   theme = theme_classic())
 
 # Marginal predictions for Bayesian ETWFE (simple)
+
+## load brms model
+b2 <- readRDS(here("code/fits", 
+  "bhet-resp-b2.rds"))
+
 bme_pred <- predictions(
   b2, 
   newdata   = subset(d2, treat==1),
@@ -216,29 +219,69 @@ bme_pred <- predictions(
   by        = "treat"
   )
 
+# plot of predicted probabilities by treatment
+bme_pred_p <- bme_pred |>
+  posterior_draws() |>
+  ggplot(aes(x = draw, fill=factor(treat))) +
+    stat_halfeye(slab_alpha = .5) + 
+    annotate("text", x = 0.57, y = 0.7, 
+           label="Control", color='#1b9e77') +
+    annotate("text", x = 0.49, y = 0.95, 
+           label="Treated", color='#d95f02') +
+  scale_x_continuous(
+    "Probability of poor respiratory symptoms", 
+    limits=c(0.4,0.7)) +
+  scale_y_continuous("Posterior Density") +
+  scale_fill_manual(values = c('#1b9e77','#d95f02')) +
+  theme_classic() + 
+  theme(legend.position = "none", axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_text(size=12))
+
 bme_avg <- slopes(
   b2, 
   newdata   = subset(d2, treat==1),
   variables = "treat", 
   by        = "treat"
-  )
+  ) 
 
-mfx <- slopes(
-    b2,
-    newdata   = subset(d2, treat==1),
-    variables = "treat",
-    by        = "treat") |>
-    posterior_draws()
+# plot of treatment effect
+bme_avg_p <- bme_avg |>
+  posterior_draws() |>
+  ggplot(aes(x = draw)) +
+    stat_halfeye(slab_alpha = .5, fill = "#7570b3") +
+    annotate("text", x = -0.075, y = 0.95, 
+           label="Difference", color = '#7570b3') +
+    geom_vline(xintercept = 0, linetype = "dashed",
+               color = "gray60") +
+    scale_x_continuous("Marginal Effect", limits=c(-0.25,0.1)) +
+    scale_y_continuous("") +
+    theme_classic() + 
+    theme(legend.position = "none", 
+        axis.text.y = element_blank(),
+        axis.line.y = element_blank(), 
+        axis.ticks = element_blank(),
+        axis.text.x = element_text(size=12))
 
-ggplot(mfx, aes(x = draw, fill = factor(treat))) +
-    stat_halfeye(slab_alpha = .5) +
-    labs(x = "Marginal Effect of Treatment",
-         y = "Posterior density",
-         fill = "Treatment")
+
+f2 <- bme_pred_p + bme_avg_p + 
+  plot_layout(widths = c(1, 1)) +
+  plot_annotation(title = "Posterior distributions of marginal predictions: poor respiratory symptoms")
+f2
+
 
 # wrangle aggregate ATTs for model summary table
+bmp <- data.frame(
+  term = bme_pred$treat,
+  estimate = bme_pred$estimate,
+  conf.low = bme_pred$conf.low,
+  conf.high = bme_pred$conf.high,
+  std.error = abs(bme_pred$conf.high - 
+                    bme_pred$conf.low) / (2 * 1.96)
+)
+
 bti <- data.frame(
-  term = paste("ATT(", bme_avg$term, ")", sep = ""),
+  term = 2,
   estimate = bme_avg$estimate,
   conf.low = bme_avg$conf.low,
   conf.high = bme_avg$conf.high,
@@ -246,12 +289,98 @@ bti <- data.frame(
                     bme_avg$conf.low) / (2 * 1.96)
 )
 
+bta <- bind_rows(bmp,bti) %>%
+  mutate(term = recode_factor(term,
+    `0` = "Untreated", `1` = "Treated",
+    `2` = "Difference"))
+
 gl <- data.frame()
 
-betwfe_me_avg <- list(tidy = bti, glance = gl)
+betwfe_me_avg <- list(tidy = bta, glance = gl)
 class(betwfe_me_avg) <- "modelsummary_list"
 
-modelsummary(list("Bayesian Simple Average" = betwfe_me_avg),
+# Freq analysis
+library(etwfe)
+library(fixest)
+
+fm <- glm(resp ~  
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021,
+        family = "binomial", data = d2)
+
+library(sandwich)
+library(lmtest)
+clustered_se <- vcovCL(fm, cluster = d2$cohort_year)
+
+etwfe = fixest::feols(
+  resp ~ treat:i(cohort_year, i.year, ref=-Inf, ref2 = 2018) | cohort_year + year,
+  data = d2,
+  vcov = ~v_id
+)
+
+me_pred <- predictions(
+  fm, 
+  newdata   = subset(d2, treat==1),
+  variables = "treat", 
+  by        = "treat",
+  vcov = "HC3"
+  )
+
+me_avg <- slopes(
+  fm, 
+  newdata   = subset(d2, treat==1),
+  variables = "treat", 
+  by        = "treat",
+  vcov = "HC3"
+  )
+
+# wrangle aggregate ATTs for model summary table
+fmp <- data.frame(
+  term = me_pred$treat,
+  estimate = me_pred$estimate,
+  conf.low = me_pred$conf.low,
+  conf.high = me_pred$conf.high,
+  std.error = abs(me_pred$conf.high - 
+                    me_pred$conf.low) / (2 * 1.96)
+)
+
+fti <- data.frame(
+  term = 2,
+  estimate = me_avg$estimate,
+  conf.low = me_avg$conf.low,
+  conf.high = me_avg$conf.high,
+  std.error = abs(me_avg$conf.high - 
+                    me_avg$conf.low) / (2 * 1.96)
+)
+
+fta <- bind_rows(fmp,fti) %>%
+  mutate(term = recode_factor(term,
+    `0` = "Untreated", `1` = "Treated",
+    `2` = "Difference"))
+
+gl <- data.frame()
+
+fetwfe_me_avg <- list(tidy = fta, glance = gl)
+class(fetwfe_me_avg) <- "modelsummary_list"
+
+# wrangle aggregate ATTs for model summary table
+ti <- data.frame(
+  term = paste("ATT(", me_avg$term, ")", sep = ""),
+  estimate = me_avg$estimate,
+  std.error = me_avg$std.error,
+  conf.low = me_avg$estimate - 1.96*me_avg$std.error,
+  conf.high = me_avg$estimate + 1.96*me_avg$std.error)
+
+gl <- data.frame()
+
+etwfe_me_avg <- list(tidy = ti, glance = gl)
+class(etwfe_me_avg) <- "modelsummary_list"
+
+modelsummary(list("Simple Average" = etwfe_me_avg),
   shape = term ~ model + statistic, 
   statistic = c("({std.error})", "conf.int"),
   gof_omit ='._*')
