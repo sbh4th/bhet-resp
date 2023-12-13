@@ -119,6 +119,9 @@ te_med <-
       seed = 2847,
       file = "code/fits/bhet-resp-te_med")
 
+# load if model already exists
+te_med <- readRDS("code/fits/bhet-resp-te_med.rds")
+
 ## check the chains
 mcmc_trace(te_med, pars=c("b_Intercept", "b_year_2021")) +
   theme_classic() + ylab("")
@@ -156,8 +159,8 @@ priors_lung <- (plot_pd1 | plot_pdd) +
 # Marginal predictions for Bayesian ETWFE (simple)
 
 ## load brms model
-b2 <- readRDS(here("code/fits", 
-  "bhet-resp-b2.rds"))
+#b2 <- readRDS(here("code/fits", 
+ # "bhet-resp-b2.rds"))
 
 bme_pred <- predictions(
   te_med, 
@@ -171,7 +174,7 @@ bme_pred_p <- bme_pred |>
   posterior_draws() |>
   ggplot(aes(x = draw, fill=factor(treat))) +
     stat_halfeye(slab_alpha = .5) + 
-    annotate("text", x = 0.57, y = 0.7, 
+    annotate("text", x = 0.61, y = 0.7, 
            label="Control", color='#1b9e77') +
     annotate("text", x = 0.49, y = 0.95, 
            label="Treated", color='#d95f02') +
@@ -298,6 +301,9 @@ cde_med_min_ni <-
       seed = 265,
       file = "code/fits/bhet-resp-cde_med_min_ni")
 
+# load if already run
+cde_med_min <- readRDS("code/fits/bhet-resp-cde_med_min_ni.rds")
+
 cde_med_med <-
   brm(data = d3, 
       family = bernoulli(),
@@ -321,6 +327,7 @@ cde_med_med <-
       file = "code/fits/bhet-resp-cde_med_min")
 
 
+
 # does the policy affect average temperature?
 te_temp <-
   brm(data = d3, 
@@ -340,17 +347,64 @@ te_temp <-
       seed = 265,
       file = "code/fits/te_temp_min")
 
+# load if already run
+te_temp_min <- readRDS("code/fits/te_temp_min.rds")
+
 ndc <- subset(d3, treat==1) %>%
   mutate(mean_h=20)
 
 
-mediator::mediator(data = d3,
-  out.model = glm(resp ~ treat + med_h + 
-    treat * med_h + year_2019 + year_2020,
-    family = "binomial",
-    data = mediation_example),
-  med.model = lm(med_h ~ treat +
-    year_2019 + year_2020, 
-    family = "gaussian",
-    data = d3), treat = "treat")
+# mediator model
+m_model <- bf(min_h ~ 1 + (1 | v_id) +
+                treat:cohort_year_2019:year_2019 + 
+                treat:cohort_year_2019:year_2021 +
+                treat:cohort_year_2020:year_2021 +
+                treat:cohort_year_2021:year_2021 +
+                cohort_year_2019 + cohort_year_2020 +
+                cohort_year_2021 + year_2019 + year_2021) +
+                gaussian()
+
+# outcome model
+y_model <- bf(resp ~ 1 + (1 | v_id) + min_h + 
+                treat:cohort_year_2019:year_2019 + 
+                treat:cohort_year_2019:year_2021 +
+                treat:cohort_year_2020:year_2021 +
+                treat:cohort_year_2021:year_2021 +
+                cohort_year_2019 + cohort_year_2020 +
+                cohort_year_2021 + year_2019 + year_2021) +
+                bernoulli()
+
+# priors
+priormed <- c(
+  prior(normal(10, 5), class = Intercept, resp = minh),
+  prior(normal(0, 5), class = b, resp = minh),
+  prior(exponential(1), class = sd, resp = minh),
+  prior(normal(0, 1), class = Intercept, resp = resp),
+  prior(normal(0, 1), class = b, resp = resp),
+  prior(exponential(1), class = sd, resp = resp))
+
+medfit <- brm(
+  m_model + y_model + set_rescor(FALSE),
+  data = d3, iter = 2000, warmup = 1000,
+  prior = priormed
+  chains = 4, cores = 4,
+  sample_prior = "yes")
+
+
+brm(data = d3, 
+      family = bernoulli(),
+      resp ~ 1 + (1 | v_id) + min_h +
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021,
+      prior = c(prior(normal(0, 1), class = Intercept),
+                prior(normal(0, 1), class = b),
+                prior(exponential(1), class = sd)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = "yes", 
+      seed = 265,
+      file = "code/fits/bhet-resp-cde_med_min_ni")
 
