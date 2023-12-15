@@ -46,10 +46,10 @@ d <- read_dta(here("data-clean",
   col_select= c(hh_id, ptc_id, wave, ID_VILLAGE, 
                 ban_status_2019, ban_status_2020, 
                 ban_status_2021, ban_status_no, 
-                ban_status_composite,
+                ban_status_composite, smoking,
                 freq_cough, freq_phlegm,
                 freq_wheezing, freq_breath,
-                freq_no_chest)) 
+                freq_no_chest, health_selfreport)) 
 
 # define main outcome
 d1 <- d %>% drop_na() %>%
@@ -69,6 +69,7 @@ d1 <- d %>% drop_na() %>%
     treat = ifelse(year >= cohort_year, 1, 0),
     cohort_year = ifelse(cohort_year == 2022,-Inf, 
                          cohort_year)) %>%
+  rename(srh = health_selfreport) %>%
   # relabel last cohort year 
   # treatment cohort dummies
   add_dummy_variables(cohort_year, 
@@ -91,7 +92,7 @@ d2 <- d1 %>%
 d3 <- d2 %>% 
   select(starts_with(c("year","cohort")), 
   "ID_VILLAGE","resp","treat", "med_h",
-  "min_h", "max_h") %>%
+  "min_h", "max_h", "smoking", "srh") %>%
   
   # limit to complete cases
   drop_na() %>% 
@@ -134,7 +135,7 @@ pd <- prior_draws(te_med) %>%
   # treatment effect
   mutate(diff = pd1 - pd0)
 
-## plot for intercept
+## plot for intercept prior
 plot_pd1 <- pd %>%
   ggplot(aes(x = pd1)) + 
   stat_halfeye(color= "black", fill =  '#1b9e77') +
@@ -142,7 +143,7 @@ plot_pd1 <- pd %>%
     y = NULL, subtitle = "Prior for Intercept") +
   theme_classic()
 
-## plot for treatment effect
+## plot for treatment effect prior
 plot_pdd <- pd %>%
   ggplot(aes(x = diff)) + 
   stat_halfeye(color= "black", fill =  '#d95f02') +
@@ -200,11 +201,11 @@ bme_avg_p <- bme_avg |>
   posterior_draws() |>
   ggplot(aes(x = draw)) +
     stat_halfeye(slab_alpha = .5, fill = "#7570b3") +
-    annotate("text", x = -0.075, y = 0.95, 
+    annotate("text", x = -0.106, y = 0.95, 
            label="Difference", color = '#7570b3') +
     geom_vline(xintercept = 0, linetype = "dashed",
                color = "gray60") +
-    scale_x_continuous("Marginal Effect", limits=c(-0.25,0.1)) +
+    scale_x_continuous("Marginal Effect", limits=c(-0.3,0.1)) +
     scale_y_continuous("") +
     theme_classic() + 
     theme(legend.position = "none", 
@@ -304,6 +305,7 @@ cde_med_min_ni <-
 # load if already run
 cde_med_min <- readRDS("code/fits/bhet-resp-cde_med_min_ni.rds")
 
+# with interaction
 cde_med_med <-
   brm(data = d3, 
       family = bernoulli(),
@@ -386,7 +388,7 @@ priormed <- c(
 medfit <- brm(
   m_model + y_model + set_rescor(FALSE),
   data = d3, iter = 2000, warmup = 1000,
-  prior = priormed
+  prior = priormed,
   chains = 4, cores = 4,
   sample_prior = "yes")
 
