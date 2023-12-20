@@ -42,7 +42,7 @@ bhet_project %>%
 
 ## 1 Read in dataset, limit to resp vars ----
 d <- read_dta(here("data-clean", 
-                   "BHET_master_data_6Sep2023.dta"), 
+                   "BHET_master_data_15Dec2023.dta"), 
   col_select= c(hh_id, ptc_id, wave, ID_VILLAGE, 
                 ban_status_2019, ban_status_2020, 
                 ban_status_2021, ban_status_no, 
@@ -59,6 +59,8 @@ d1 <- d %>% drop_na() %>%
     freq_wheezing < 3 |
     freq_breath < 3 |
     freq_no_chest < 3, 1, 0),
+    fphealth = if_else(health_selfreport > 2, 1, 0, 
+                       missing = NA),
     year = if_else(wave==1, 2018, 
       if_else(wave==2, 2019,
         if_else(wave==4, 2021, 0))),
@@ -92,7 +94,8 @@ d2 <- d1 %>%
 d3 <- d2 %>% 
   select(starts_with(c("year","cohort")), 
   "ID_VILLAGE","resp","treat", "med_h",
-  "min_h", "max_h", "smoking", "srh") %>%
+  "min_h", "max_h", "smoking", "srh",
+  "fphealth") %>%
   
   # limit to complete cases
   drop_na() %>% 

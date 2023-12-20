@@ -46,7 +46,7 @@ u2s_fits <- osf_retrieve_node("cv9qg")
 
 ## 1 Read in dataset, limit to resp vars ----
 d <- read_dta(here("data-clean", 
-                   "BHET_master_data_6Sep2023.dta"), 
+                   "BHET_master_data_15Dec2023.dta"), 
   col_select= c(hh_id, ptc_id, wave, ID_VILLAGE, 
                 ban_status_2019, ban_status_2020, 
                 ban_status_2021, ban_status_no, 
