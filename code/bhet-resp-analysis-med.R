@@ -3,7 +3,7 @@
 #  input:    bhet-master; indoor temp files
 #  output:   
 #  project:  BHET
-#  author:   sam harper \ 2023-12-03
+#  author:   sam harper \ 2024-01-18
 
 
 ##  0 Load needed packages ----
@@ -30,75 +30,19 @@ library(marginaleffects)
 options(mc.cores = 4,
         brms.backend = "cmdstanr")
 
-## download data files from OSF (data-clean component)
-# dir.create("data-clean")
-bhet_project <- osf_retrieve_node("b4wze")
-bhet_project %>%
-  osf_ls_files("Master Dataset (Season 4)",
-               pattern = "dta") %>%
-  osf_download(path = here("data-clean"),
-    conflicts = "overwrite")
 
-
-## 1 Read in dataset, limit to resp vars ----
-d <- read_dta(here("data-clean", 
-                   "BHET_master_data_15Dec2023.dta"), 
-  col_select= c(hh_id, ptc_id, wave, ID_VILLAGE, 
-                ban_status_2019, ban_status_2020, 
-                ban_status_2021, ban_status_no, 
-                ban_status_composite, smoking,
-                freq_cough, freq_phlegm,
-                freq_wheezing, freq_breath,
-                freq_no_chest, health_selfreport)) 
-
-# define main outcome
-d1 <- d %>% drop_na() %>%
-  mutate(resp = if_else(
-    freq_cough < 3 |
-    freq_phlegm < 3 |
-    freq_wheezing < 3 |
-    freq_breath < 3 |
-    freq_no_chest < 3, 1, 0),
-    fphealth = if_else(health_selfreport > 2, 1, 0, 
-                       missing = NA),
-    year = if_else(wave==1, 2018, 
-      if_else(wave==2, 2019,
-        if_else(wave==4, 2021, 0))),
-    cohort_year = if_else(
-      ban_status_composite==1, 2019, 
-      if_else(ban_status_composite==2, 2020, 
-              if_else(ban_status_composite==3, 2021, 2022))),
-    treat = ifelse(year >= cohort_year, 1, 0),
-    cohort_year = ifelse(cohort_year == 2022,-Inf, 
-                         cohort_year)) %>%
-  rename(srh = health_selfreport) %>%
-  # relabel last cohort year 
-  # treatment cohort dummies
-  add_dummy_variables(cohort_year, 
-    values=c(-Inf,2019,2020,2021), 
-    remove_original = F) %>%
-  # wave dummies
-  add_dummy_variables(year, 
-    values=c(2018,2019,2021), remove_original = F)
-
-dt <- readxl::read_excel(here("data-clean", 
-  "HH_indoor_temperature_HEATING_SEASON.xlsx")) %>%
-  select(ptc_id, wave, min_h, med_h, max_h)
-
-# merge indoor temp data with resp data
-d2 <- d1 %>%
-  left_join(dt, by = join_by(ptc_id,wave))
+# load data
 
 # limit sample
 
 d3 <- d2 %>% 
   select(starts_with(c("year","cohort")), 
   "ID_VILLAGE","resp","treat", "med_h",
-  "min_h", "max_h", "smoking", "srh",
-  "fphealth") %>%
+  "min_h", "max_h", "ipm25", "district_2",
+  "district_3", "district_4") %>%
   
   # limit to complete cases
-  drop_na() %>% 
+  drop_na(-ipm25, -med_h, -min_h, -max_h) %>% 
   
   # create unique continuous village Id
   group_by(ID_VILLAGE) %>%
@@ -121,10 +65,10 @@ te_med <-
       iter = 2000, warmup = 1000, chains = 4, cores = 4,
       sample_prior = "yes", 
       seed = 2847,
-      file = "code/fits/bhet-resp-te_med")
+      file = "code/fits/bhet-resp-te")
 
 # load if model already exists
-te_med <- readRDS("code/fits/bhet-resp-te_med.rds")
+te_med <- readRDS("code/fits/bhet-resp-te.rds")
 
 ## check the chains
 mcmc_trace(te_med, pars=c("b_Intercept", "b_year_2021")) +
@@ -178,9 +122,9 @@ bme_pred_p <- bme_pred |>
   posterior_draws() |>
   ggplot(aes(x = draw, fill=factor(treat))) +
     stat_halfeye(slab_alpha = .5) + 
-    annotate("text", x = 0.61, y = 0.7, 
+    annotate("text", x = 0.57, y = 0.6, 
            label="Control", color='#1b9e77') +
-    annotate("text", x = 0.49, y = 0.95, 
+    annotate("text", x = 0.50, y = 0.95, 
            label="Treated", color='#d95f02') +
   scale_x_continuous(
     "Probability of poor respiratory symptoms", 
@@ -190,7 +134,7 @@ bme_pred_p <- bme_pred |>
   theme_classic() + 
   theme(legend.position = "none", axis.text.y = element_blank(),
         axis.ticks = element_blank(),
-        axis.text.x = element_text(size=12))
+        axis.text.x = element_text(size=16))
 
 bme_avg <- slopes(
   te_med, 
@@ -204,7 +148,7 @@ bme_avg_p <- bme_avg |>
   posterior_draws() |>
   ggplot(aes(x = draw)) +
     stat_halfeye(slab_alpha = .5, fill = "#7570b3") +
-    annotate("text", x = -0.106, y = 0.95, 
+    annotate("text", x = -0.07, y = 0.95, 
            label="Difference", color = '#7570b3') +
     geom_vline(xintercept = 0, linetype = "dashed",
                color = "gray60") +
@@ -215,7 +159,7 @@ bme_avg_p <- bme_avg |>
         axis.text.y = element_blank(),
         axis.line.y = element_blank(), 
         axis.ticks = element_blank(),
-        axis.text.x = element_text(size=12))
+        axis.text.x = element_text(size=16))
 
 
 f2 <- bme_pred_p + bme_avg_p + 
@@ -286,30 +230,183 @@ modelsummary(list("Bayesian Cohort Average" = betwfe_me_c),
 
 
 # mediation model
-# assuming no interaction
-cde_med_min_ni <-
-  brm(data = d3, 
-      family = bernoulli(),
-      resp ~ 1 + (1 | v_id) + min_h +
+# model for outcome (including missing indoor PM2.5)
+bf_resp <- bf(resp ~ 1 + (1 | v_id) + mi(ipm25) +
         treat:cohort_year_2019:year_2019 + 
         treat:cohort_year_2019:year_2021 +
         treat:cohort_year_2020:year_2021 +
         treat:cohort_year_2021:year_2021 +
+        treat:cohort_year_2019:year_2019:mi(ipm25) + 
+        treat:cohort_year_2019:year_2021:mi(ipm25)+
+        treat:cohort_year_2020:year_2021:mi(ipm25) +
+        treat:cohort_year_2021:year_2021:mi(ipm25) +
         cohort_year_2019 + cohort_year_2020 +
         cohort_year_2021 + year_2019 + year_2021,
-      prior = c(prior(normal(0, 1), class = Intercept),
-        prior(normal(0, 1), class = b),
-        prior(exponential(1), class = sd)),
+        family = bernoulli() )
+
+# model for missing PM2.5
+bf_pm <- bf(ipm25 | mi() ~ 1, family = lognormal())
+
+# combined multivariate model
+pmod <- bf_resp + bf_pm + set_rescor(FALSE)
+
+# priors
+# get_prior(data=d3, pmod)
+
+# priors
+priormed <- c(
+  prior(normal(0, 1), class = Intercept, resp = resp),
+  prior(normal(0, 1), class = b, resp = resp),
+  prior(exponential(1), class = sd, resp = resp))
+
+cde_pm_ln <- 
+  brm(data = d3, 
+      pmod,  # here we insert the model
+      prior = priormed,
       iter = 2000, warmup = 1000, chains = 4, cores = 4,
-      sample_prior = "yes", 
-      seed = 265,
-      file = "code/fits/bhet-resp-cde_med_min_ni")
+      seed =257,
+      file = "code/fits/cde_pm_ln")
 
-# load if already run
-cde_med_min <- readRDS("code/fits/bhet-resp-cde_med_min_ni.rds")
+# new data for estimated predictions
+ndpm_med <- subset(d3, treat==1) %>%
+  mutate(ipm25 = 55)
 
-# with interaction
-cde_med_med <-
+# counterfactual predictions (median PM)
+bcde_pred_median <- predictions(
+  cde_pm_ln, 
+  newdata   = ndpm_med,
+  variables = "treat", 
+  by        = "treat"
+  )
+
+bcde_med <- bcde_pred_median %>% 
+  filter(group == "resp") %>% 
+  pivot_wider(names_from = treat, 
+    values_from = c(estimate, conf.low, conf.high)) %>% 
+  mutate(estimate_2 = estimate_1 - estimate_0, 
+    se_0 = abs(conf.high_0 - conf.low_0) / (2 * 1.96), 
+    se_1 = abs(conf.high_1 - conf.low_1) / (2 * 1.96)) %>% 
+  mutate (se_2 = sqrt(se_0^2 + se_1^2),
+          conf.low_2 = estimate_2 - 1.96 * se_2,
+          conf.high_2 = estimate_2 + 1.96 * se_2) %>%
+  pivot_longer(!group, names_to = c(".value", "treat"),
+    names_pattern = "(.*)_(.)")
+
+ndpm_q25 <- subset(d3, treat==1) %>%
+  mutate(ipm25 = 32)
+
+# counterfactual predictions (25%ile of PM)
+bcde_pred_q25 <- predictions(
+  cde_pm_ln, 
+  newdata   = ndpm_q25,
+  variables = "treat", 
+  by        = "treat"
+  )
+
+bcde_q25 <- bcde_pred_q25 %>% 
+  filter(group == "resp") %>% 
+  pivot_wider(names_from = treat, 
+    values_from = c(estimate, conf.low, conf.high)) %>% 
+  mutate(estimate_2 = estimate_1 - estimate_0, 
+    se_0 = abs(conf.high_0 - conf.low_0) / (2 * 1.96), 
+    se_1 = abs(conf.high_1 - conf.low_1) / (2 * 1.96)) %>% 
+  mutate (se_2 = sqrt(se_0^2 + se_1^2),
+          conf.low_2 = estimate_2 - 1.96 * se_2,
+          conf.high_2 = estimate_2 + 1.96 * se_2) %>%
+  pivot_longer(!group, names_to = c(".value", "treat"),
+    names_pattern = "(.*)_(.)")
+
+  
+# wrangle aggregate ATTs for model summary table
+bmp_med <- data.frame(
+  term = bcde_med$treat,
+  estimate = bcde_med$estimate,
+  conf.low = bcde_med$conf.low,
+  conf.high = bcde_med$conf.high,
+  std.error = bcde_med$se
+)
+
+bmp_med <- bmp_med %>%
+  mutate(term = recode_factor(term,
+    `0` = "Untreated", `1` = "Treated",
+    `2` = "Difference"))
+
+bmp_q25 <- data.frame(
+  term = bcde_q25$treat,
+  estimate = bcde_q25$estimate,
+  conf.low = bcde_q25$conf.low,
+  conf.high = bcde_q25$conf.high,
+  std.error = bcde_q25$se
+)
+
+bmp_q25 <- bmp_q25 %>%
+  mutate(term = recode_factor(term,
+    `0` = "Untreated", `1` = "Treated",
+    `2` = "Difference"))
+
+gl <- data.frame()
+
+bcde_me_med <- list(tidy = bmp_med, glance = gl)
+class(bcde_me_med) <- "modelsummary_list"
+
+bcde_me_q25 <- list(tidy = bmp_q25, glance = gl)
+class(bcde_me_q25) <- "modelsummary_list"
+
+
+# all estimates in one table
+modelsummary(list("Total Effect" = betwfe_me_avg,
+  "CDE (50th %ile)" = bcde_me_med,
+  "CDE (25th %ile)" = bcde_me_q25),
+  shape = term ~ model + statistic, 
+  statistic = "conf.int",
+  gof_omit ='._*')
+
+
+
+# Supplementary analyses
+# include product terms for cohort and time
+bf_resp_full <- bf(resp ~ 1 + (1 | v_id) + 
+        mi(ipm25) * (treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021), 
+        family = bernoulli() )
+
+# drop product terms for exposure-mediation interaction
+bf_resp_np <- bf(resp ~ 1 + (1 | v_id) + 
+        mi(ipm25) + treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021, 
+        family = bernoulli() )
+
+# combined multivariate model
+# pmod_full <- bf_resp_full + bf_pm + set_rescor(FALSE)
+pmod_np <- bf_resp_np + bf_pm + set_rescor(FALSE)
+
+cde_pm_ln_full <- 
+  brm(data = d3, 
+      pmod_full,  # insert the model
+      prior = priormed, # priors defined above
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed =3779,
+      file = "code/fits/cde_pm_ln_full")
+
+cde_pm_ln_np <- 
+  brm(data = d3, 
+      pmod_np,  # insert the model
+      prior = priormed, # priors defined above
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed =3779,
+      file = "code/fits/cde_pm_ln_np")
+
+
+
+cde_temp_min <-
   brm(data = d3, 
       family = bernoulli(),
       resp ~ 1 + (1 | v_id) + min_h +
@@ -333,17 +430,23 @@ cde_med_med <-
 
 
 
-# does the policy affect average temperature?
-te_temp <-
-  brm(data = d3, 
-      family = gaussian(),
-      min_h ~ 1 + (1 | v_id) +
+# does the policy affect indoor PM?
+bf_treat <- bf(ipm25_10 ~ 1 + (1 | v_id) +
         treat:cohort_year_2019:year_2019 + 
         treat:cohort_year_2019:year_2021 +
         treat:cohort_year_2020:year_2021 +
         treat:cohort_year_2021:year_2021 +
         cohort_year_2019 + cohort_year_2020 +
-        cohort_year_2021 + year_2019 + year_2021,
+        cohort_year_2021 + year_2019 + year_2021)
+
+bf_pm <- bf(ipm25_10 | mi() ~ 1)
+
+bmodel <- bf_treat + bf_pm + set_rescor(FALSE)
+
+te_pm <-
+  brm(data = d3, 
+      family = gaussian(),
+
       prior = c(prior(normal(0, 10), class = Intercept),
         prior(normal(0, 5), class = b),
         prior(exponential(1), class = sd)),
@@ -357,6 +460,9 @@ te_temp_min <- readRDS("code/fits/te_temp_min.rds")
 
 ndc <- subset(d3, treat==1) %>%
   mutate(mean_h=20)
+
+
+
 
 
 # mediator model
@@ -412,4 +518,28 @@ brm(data = d3,
       sample_prior = "yes", 
       seed = 265,
       file = "code/fits/bhet-resp-cde_med_min_ni")
+
+
+x <- seq(0.01, 10, length.out = 1000)
+mu <- 0
+sigma <- 0.5
+y <- dlnorm(x, meanlog = mu, sdlog = sigma)
+
+
+
+te_wt <-
+  brm(data = dh, 
+      family = gaussian(),
+      weight ~ 1 + (1 | v_id) + height +  
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021,
+      prior = c(prior(normal(65, 10), class = Intercept),
+        prior(normal(0, 5), class = b),
+        prior(exponential(1), class = sd)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = "yes")
 
