@@ -46,7 +46,10 @@ d <- read_dta(here("data-clean",
 
 # define main outcome
 d1 <- d %>% drop_na(-PM25_indoor_seasonal_hs) %>%
-  mutate(resp = if_else(
+  mutate(
+    cresp = rowSums(across(c(freq_breath, freq_cough, 
+      freq_phlegm, freq_wheezing, freq_no_chest))),
+    resp = if_else(
     freq_cough < 3 |
     freq_phlegm < 3 |
     freq_wheezing < 3 |
@@ -86,9 +89,6 @@ dt <- readxl::read_excel(here("data-clean",
 d2 <- d1 %>%
   left_join(dt, by = join_by(ptc_id, wave))
 
-
-
-
 # overall prevalence
 d1 %>% group_by(resp) %>% tally()
 
@@ -96,7 +96,7 @@ d1 %>% group_by(resp) %>% tally()
 
 d2 <- d1 %>% 
   select(starts_with(c("year","cohort")), 
-  "ID_VILLAGE","resp","treat") %>%
+  "ID_VILLAGE","cresp","resp","treat") %>%
   
   # limit to complete cases
   drop_na() %>% 
@@ -106,16 +106,30 @@ d2 <- d1 %>%
   mutate(v_id = cur_group_id()) %>%
   ungroup()
 
+write_rds(d2, here("data-clean", "bhet-resp-data.rds"))
+
+bc1 <-
+  brm(data = d2,
+      family = poisson(),
+      cresp | trunc(ub = 20) ~ 1 + (1 | v_id),
+      prior = c(prior(normal(0, 3), class = Intercept),
+                prior(exponential(1), class = sd)),
+      iter = 200, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = "yes",
+      seed = 2037,
+      file = "code/fits/bhet-cresp-bc1")
+
+
 b1 <-
   brm(data = d2, 
       family = bernoulli(),
       resp ~ 1 + (1 | v_id),
-      prior = c(prior(normal(0, 1), class = Intercept), 
+      prior = c(prior(normal(0, 3), class = Intercept), 
                 prior(exponential(1), class = sd)),        
       iter = 2000, warmup = 1000, chains = 4, cores = 4,
       sample_prior = "yes",
-      seed = 287,
-      file = "code/fits/bhet-resp-b1")
+      seed = 3856,
+      file = "code/fits/bhet-cresp-b1")
 
 ## check the chains
 mcmc_trace(b1, pars="b_Intercept") +

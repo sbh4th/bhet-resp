@@ -33,6 +33,9 @@ options(mc.cores = 4,
 
 # load data
 
+## 1 Read in dataset, limit to resp vars ----
+dresp <- read_rds(here("data-clean", "bhet-resp-data.rds"))
+
 # limit sample
 
 d3 <- d2 %>% 
