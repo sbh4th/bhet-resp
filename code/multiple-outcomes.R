@@ -8,7 +8,7 @@ lapply(pkgs, library, character.only=TRUE)
 
 ## 1 Read in dataset, limit to resp vars ----
 dresp <- read_rds(here("data-clean", 
-  "bhet-resp-data.rds"))
+  "bhet-resp-data.rds")) 
 
 ## 2 Estimate DD across several binary outcomes
 
@@ -19,7 +19,7 @@ estimate_logit_did <- function(outcome_vars, predictor_vars) {
     map(~ {
       formula <- as.formula(paste(.x, "~", 
         paste(predictor_vars, collapse = " + ")))
-      glm(formula, data = dresp, family = "binomial")
+      glm(formula, data = dresp_cc, family = "binomial")
     })
   
   return(models)
@@ -39,6 +39,10 @@ rhs_did <- c("treat:cohort_year_2019:year_2019",
 
 rhs_dida <- c(rhs_did, "age_health", "male", 
   "csmoke", "fsmoke")
+
+dresp_cc <- dresp %>%
+  # limit to complete cases
+  drop_na(b_out, age_health, male, csmoke, fsmoke)
 
 # gather estimates across models
 # basic DiD
@@ -120,6 +124,18 @@ did_t1 <- logit_me %>% {
   )
 }
 
+# grab number of observations
+did_obs <- logit_did %>% {
+  tibble(
+    outcome = names(logit_did),
+    nobs = map_int(., "df.null") + 1
+  )
+}
+
+did_t1 <- did_t1 %>%
+  inner_join(did_obs) %>%
+  relocate(outcome, nobs)
+
 # grab estimates and SEs from adjusted DiD results
 did_t2 <- logit_mea %>% {
   tibble(
@@ -133,6 +149,19 @@ did_t2 <- logit_mea %>% {
       sprintf("%.2f", ula), ")", sep="")
   )
 }
+
+# grab number of observations
+did_obs2 <- logit_dida %>% {
+  tibble(
+    outcome = names(logit_dida),
+    nobs = map_int(., "df.null") + 1
+  )
+}
+
+did_t2 <- did_t2 %>%
+  inner_join(did_obs2) %>%
+  relocate(outcome, nobs) %>%
+  select
 
 didt <- cbind(did_t1, did_t2) %>%
   dplyr::select(est, ci, esta, cia) %>%
@@ -161,16 +190,16 @@ modelsummary(list("Any symptom" = logit_me$resp,
   "Wheezing" = logit_mea$wheeze,
   "Shortness of breath" = logit_mea$breath,
   "Chest trouble" = logit_mea$nochest),
-  group = model ~ term + statistic,
+  shape = model ~ term + statistic,
   statistic = 'conf.int')
 
-didtable <- modelsummary(list("Any" = logit_me$resp, "Cough" = logit_me$cough), group = model ~ term + statistic,
+didtable <- modelsummary(list("Any" = logit_me$resp, "Cough" = logit_me$cough), shape = model ~ term + statistic,
   statistic = 'conf.int')
 
-modelsummary(list("Any" = logit_me$resp, "Cough" = logit_me$cough), group =  ~ "" + statistic,
+modelsummary(list("Any" = logit_me$resp, "Cough" = logit_me$cough), shape =  ~ "" + statistic,
   statistic = 'conf.int')
 
-didatable <- modelsummary(list("Any" = logit_mea$resp, "Cough" = logit_mea$cough), group = model ~ term + statistic,
+didatable <- modelsummary(list("Any" = logit_mea$resp, "Cough" = logit_mea$cough), shape = model ~ term + statistic,
   statistic = 'conf.int')
 
 data_tables <- data.frame(good_table = didtable, 
@@ -395,4 +424,8 @@ combined_plot <- wrap_plots(plots) +
 
 ggsave(here("images", "resp-pretrends.png"), 
        plot=combined_plot, width=8.5, height=11)
+
+for (outcome in seq_along(b_out)) {
+  nobs(logit_did$outcome)
+}
 
