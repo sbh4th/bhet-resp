@@ -398,3 +398,160 @@ me <- mpp %>%
   mutate(diff = `Treated` - `Control`) %>%
   median_hdi(diff, .width = 0.95) 
 me
+
+
+dv <- dc %>% group_by(v_id, wave) %>% summarize(y = sum(cough), ban_status = mean(ban_status_composite), pop = n()) %>%
+  mutate(    
+    year = if_else(wave==1, 2018, 
+      if_else(wave==2, 2019,
+        if_else(wave==4, 2021, 0))),
+    cohort_year = if_else(
+      ban_status==1, 2019, 
+      if_else(ban_status==2, 2020, 
+              if_else(ban_status==3, 2021, 2022))),
+    treat = ifelse(year >= cohort_year, 1, 0),
+    cohort_year = ifelse(cohort_year == 2022,-Inf, 
+                         cohort_year),
+    lnpop = log(pop)) %>%
+  # relabel last cohort year 
+  # treatment cohort dummies
+  add_dummy_variables(cohort_year, 
+    values=c(-Inf,2019,2020,2021), 
+    remove_original = F) %>%
+  # wave dummies
+  add_dummy_variables(year, 
+    values=c(2018,2019,2021), remove_original = F) 
+
+pm <- glm(y ~  
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021, 
+        offset = lnpop,
+        family = "poisson", data=dv)
+
+pm_pred <- predictions(
+  pm,
+  type = "response",
+  newdata   = me_data,
+  variables = "treat", 
+  by        = "treat",
+  vcov = "HC3"
+  )
+
+pmr <- glm(yrate ~  
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021,
+        family = "gaussian", data=dv)
+
+pml <- glm(y ~  
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021 + 
+          lnpop,
+        family = "poisson", data=dv)
+
+
+df <- df %>% mutate(lnpop = log(population))
+library(RStata)
+options("RStata.StataVersion" = 16)
+options("RStata.StataPath"= '/Applications/Stata/StataMP.app/Contents/MacOS/stata-mp')
+
+m1 <- glm(deaths ~ gender + age_group + year, offset=lnpop, data = df)
+
+# Bootstrap to get standard error of RR
+bsme <- function(splits) {
+  x <- analysis(splits)
+  model <- glm(y ~  
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021, 
+        offset = lnpop,
+        family = "poisson", data=x)
+  me_0 <- x %>% filter(treat==1) %>%
+    mutate(treat=0, lnpop=0)
+  me_1 <- x %>% filter(treat==1) %>%
+    mutate(treat=1, lnpop=0)
+  amp_0 <- mean(predict(model, newdata = me_0, 
+                   type = "response"))
+  amp_1 <- mean(predict(model, newdata = me_1, 
+                   type = "response"))
+  amp_1 - amp_0
+}
+
+set.seed(3846)
+bs_samples <- rsample::bootstraps(dv, times = 1000)
+# iterate over each bootstrap sample and compute statistic
+bs_samples$ame <- map_dbl(bs_samples$splits, bsme)
+quantile(bs_samples$ame, probs = c(.05, .5, .95))
+
+
+
+
+
+
+
+
+
+
+# set treated pop to untreated, offset to 0
+mf_0 <- dv %>% filter(treat==1) %>%
+    mutate(treat=0, lnpop=0)
+# set treated pop to treated, offset to 0
+mf_1 <- dv %>% filter(treat==1) %>%
+    mutate(treat=1, lnpop=0)
+# combine data
+me_data <- bind_rows(mf_0, mf_1)
+me_data %>% 
+  add_predictions(pm, type = 'response') %>% 
+  group_by(treat) %>% 
+  pivot_wider(names_from = "treat", 
+    names_prefix = "t", values_from = pred) %>% 
+  mutate(me = t1 - t0) %>% 
+  summarize(ame = mean(me), amp0 = mean(t0),
+            amp1 = mean(t1))
+
+
+me_data %>%
+  add_predictions(pm_fe, type = 'response') %>%
+  group_by(treat) %>%
+  pivot_wider(names_from = "treat",
+    names_prefix = "t", values_from = pred) %>%
+  mutate(me = t1 - t0) %>%
+  summarize(ame = mean(me), amp0 = mean(t0),
+            amp1 = mean(t1))
+
+
+set.seed(13)
+
+x <- rnorm(100, sd = 0.1)
+y <- rpois(100, exp(5 * x))
+
+e <- rpois(100, 5) + 1       # this is your offset/exposure
+y_weighted <- y / e          # weighting by your offset/exposure
+
+### --- Using offset(.)
+
+mod_1 <- glm(y ~ x + offset(log(e)), family = 'poisson')
+
+### --- Using the weighted outcome
+
+mod_2 <- glm(y_weighted ~ x, family = 'poisson', weights = e)
+
+mod_3 <- glm(y_weighted ~ x, family = 'poisson')
+
+round(mod_1$coefficients, 3)
+round(mod_2$coefficients, 3)
+round(mod_3$coefficients, 3)
