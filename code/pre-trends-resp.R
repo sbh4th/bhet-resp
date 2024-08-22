@@ -93,6 +93,8 @@ run_analysis <- function(outcome, data,
     test_text = pt_test))
 }
 
+## 3 Apply function across outcomes  ----
+
 # List of outcomes
 b_out <- c("resp", "cough", "phlegm", "wheeze", 
            "breath", "nochest")
