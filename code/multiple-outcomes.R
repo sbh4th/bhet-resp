@@ -342,7 +342,7 @@ theme_pt <- function() {
 
 # Define the function to estimate the model, gather statistics, and create a plot
 run_analysis <- function(outcome, data, 
-  year_var = "year", treatment_var = "et", 
+  year_var = "year", treatment_var = "tc", 
   cohort_var = "cohort_year_2021", 
   vcov_cluster = "v_id") {
   
@@ -353,23 +353,27 @@ run_analysis <- function(outcome, data,
   
   # Compute average comparisons for the time trends by treatment status
   pt_comparisons <- avg_comparisons(pt_model, 
-    var = year_var, by = cohort_var, 
+    var = year_var, by = treatment_var, 
     vcov = as.formula(paste("~", vcov_cluster)))
   
   # Compute the difference in time trends by treatment
   pt_trend_diff <- avg_comparisons(pt_model, 
-    var = year_var, by = cohort_var, 
-    hypothesis = "b2 - b1 = 0", 
+    var = year_var, by = treatment_var, 
+    hypothesis = c("b2 - b1 = 0", "b3 - b1 = 0"), 
     vcov = as.formula(paste("~", vcov_cluster)))
   
+  # Gather statistics for the joint test
+  pt_trend_jt <- hypotheses(pt_trend_diff,
+    joint = TRUE)
+  
   # Gather statistics for the difference in pre-trends
-  pt_text <- paste("Difference in trend (SE) for treated",
-  "vs. untreated villages:", sep = "\n") 
-  pt_stats <- paste(sprintf("%.1f", 
-    pt_trend_diff$estimate),
-    " (", sprintf("%.1f", pt_trend_diff$std.error), 
-    ")", ", 95% CI: ", sprintf("%.1f", pt_trend_diff$conf.low),
-    ", ", sprintf("%.1f", pt_trend_diff$conf.high), sep = "")
+  pt_text <- "Joint F-test of equal trends by cohort:"
+  
+  pt_stats <- paste("F(", pt_trend_jt$df1, ", ", 
+    pt_trend_jt$df2, ") = ", 
+    sprintf('%.2f', pt_trend_jt$statistic) , ", p = ",
+    sprintf('%.3f', pt_trend_jt$p.value), sep="")
+  
   pt_test <- paste(pt_text, pt_stats, sep = "\n")
   
   # Plot the trends and estimates
@@ -379,13 +383,13 @@ run_analysis <- function(outcome, data,
     scale_x_continuous(breaks = c(2018, 2019)) +
     labs(subtitle = pt_test, 
       y = paste("Probability of", outcome),, x = "") +
-    scale_color_manual(name = "Treated in 2021?",
-                       labels = c("No", "Yes"),
-                       values = c("#e41a1c", "#377eb8")) +
-    scale_fill_manual(name = "Treated in 2021?",
-                      labels = c("No", "Yes"),
-                      values = c("#e41a1c", "#377eb8")) + 
-    theme_pt() # Using a basic theme, adjust as needed
+    scale_color_manual(name = "Treatment\ncohort",
+      labels = c("Never", "2020", "2021"),
+      values = c("#e41a1c", "#377eb8", "#4daf4a")) +
+    scale_fill_manual(name = "Treatment\ncohort",
+      labels = c("Never", "2020", "2021"),
+      values = c("#e41a1c", "#377eb8", "#4daf4a")) + 
+    theme_pt()
 
   return(list(model = pt_model, 
     comparisons = pt_comparisons, plot = pt_plot, 
