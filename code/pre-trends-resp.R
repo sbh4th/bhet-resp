@@ -28,9 +28,12 @@ theme_pt <- function() {
 dresp <- read_rds(here("data-clean", 
   "bhet-resp-data.rds")) 
 
-# create data frame for analysis, limited to 
-# pre-intervention years
+# create data frame for analysis
 drpt <- dresp %>% 
+  # limit to complete cases as for models
+  drop_na(b_out, age_health, male, csmoke, fsmoke) %>%
+  # limited to pre-intervention years and
+  # post-intervention cohorts
   filter(year < 2021 & cohort_year_2019==0) %>%
   mutate(tc = factor(ban_status_composite, 
     labels = c("Never", "2020", "2021")))
