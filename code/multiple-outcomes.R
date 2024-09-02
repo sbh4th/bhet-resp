@@ -47,6 +47,8 @@ dresp_cc <- dresp %>%
 # gather estimates across models
 # basic DiD
 logit_did <- estimate_logit_did(b_out, rhs_did)
+write_rds(logit_did, file = here(
+  "outputs/logit-did.rds"))
 
 # with covariates
 logit_dida <- estimate_logit_did(b_out, rhs_dida)
@@ -58,6 +60,8 @@ logit_me <- lapply(logit_did, marginaleffects::slopes,
   variables = "treat", by = "treat",
   # make sure to use cluster-robust SEs
   vcov = ~v_id)
+write_rds(logit_me, file = here(
+  "outputs/logit-me.rds"))
 
 # heterogenous treatment effects
 logit_me_het <- lapply(logit_did, 
@@ -119,8 +123,8 @@ did_t1 <- logit_me %>% {
     stderror = map_dbl(., "std.error") * 100,
     ll = est - 1.96 * stderror,
     ul = est + 1.96 * stderror,
-    ci = paste("(", sprintf("%.2f", ll), ", ",
-      sprintf("%.2f", ul), ")", sep="")
+    ci = paste("(", sprintf("%.1f", ll), ", ",
+      sprintf("%.1f", ul), ")", sep="")
   )
 }
 
@@ -145,8 +149,8 @@ did_t2 <- logit_mea %>% {
     stderrora = map_dbl(., "std.error") * 100,
     lla = esta - 1.96 * stderrora,
     ula = esta + 1.96 * stderrora,
-    cia = paste("(", sprintf("%.2f", lla), ", ",
-      sprintf("%.2f", ula), ")", sep="")
+    cia = paste("(", sprintf("%.1f", lla), ", ",
+      sprintf("%.1f", ula), ")", sep="")
   )
 }
 

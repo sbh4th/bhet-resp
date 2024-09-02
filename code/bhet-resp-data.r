@@ -3,14 +3,13 @@
 #  input:    bhet-master
 #  output:   
 #  project:  BHET
-#  author:   sam harper \ 2024-01-17
+#  author:   sam harper \ 2024-08-27
 
 
 ##  0 Load needed packages ----
 library(here)
 library(tidyverse)
 library(haven)
-library(kableExtra)
 library(modeldb)
 library(modelr)
 library(osfr)
@@ -22,7 +21,7 @@ library(modelsummary)
 bhet_project <- osf_retrieve_node("vxur5")
 bhet_project %>%
   osf_ls_files("Master Dataset (Seasons 1-4)",
-               pattern = "dta") %>%
+               pattern = "csv") %>%
   osf_download(path = here("data-clean"),
     conflicts = "overwrite")
 #
@@ -47,7 +46,8 @@ d <- read_dta(here("data-clean",
                 PM25conc_exposureugm3,
                 lived_with_smoker, years_with_smoker,
                 height, weight, occupation,
-                freq_farming, freq_exercising)) 
+                freq_farming, freq_exercising,
+                freq_drink)) 
 
 # define main outcomes and covariates
 d1 <- d %>%
@@ -71,58 +71,53 @@ d1 <- d %>%
     
     # covariates
     male = if_else(gender_health == 1, 1, 0),
-    csmoke = if_else(smoking == 1, 1, 0),
-    fsmoke = if_else(smoking == 2, 1, 0),
+    # csmoke = if_else(smoking == 1, 1, 0),
+    # fsmoke = if_else(smoking == 2, 1, 0),
     bmi = weight / (height/100)^2,
-    occ = case_when(occupation == 1 ~ "Agriculture and related workers", # Agriculture & livestock
-                                    occupation_new == 2 ~ "Manual labor",                    # Factory/manufacturing
-                                    occupation_new == 3 ~ "Non-manual labor",                # Government worker
-                                    occupation_new == 4 ~ "Non-manual labor",                # Professional/technical
-                                    occupation_new == 5 ~ "Non-manual labor",                # Service
-                                    occupation_new == 6 ~ "Unemployed",                      # Retired
-                                    occupation_new == 7 ~ "Unemployed",                      # House wife/husband
-                                    occupation_new == 8 ~ "Others",                          # Self-employed
-                                    occupation_new == 9 ~ "Unemployed",                      # Unemployed
-                                    occupation_new == 10 ~ "Others",                         # Other or not stated
-                                    occupation_new == 11 ~ "Manual labor",                   # Mining
-                                    occupation_new == 12 ~ "Manual labor",                   # Construction
-                                    TRUE ~ as.factor(occupation_new)),
-         occupation_new = factor(occupation_new, c("Agriculture and related workers", "Manual labor", "Non-manual labor", 
-                                                   "Unemployed", "Others"))) %>% 
-  mutate(ETS = ifelse(smoking == 1, "Current smoker", NA),
-         ETS = ifelse(smoking == 2, "Former Smoker", ETS),
-         ETS = ifelse(lived_with_smoker %in% c(2,3) & is.na(ETS), "Never smoker lived with smoker", ETS),
-         ETS = ifelse(lived_with_smoker == 1 & is.na(ETS), "No exposure to tobacco smoking", ETS),
-         ETS = factor(ETS, c("No exposure to tobacco smoking", "Never smoker lived with smoker", 
-                             "Former Smoker", "Current smoker"))) %>% 
-  mutate(freq_drink = case_when(freq_drink == 1 ~ "Never",
-                                freq_drink == 2 ~ "Occasional",
-                                freq_drink == 3 ~ "Occasional",
-                                freq_drink == 4 ~ "Occasional",
-                                freq_drink == 5 ~ "Occasional",
-                                freq_drink == 6 ~ "Regular",
-                                freq_drink == 7 ~ "Regular",
-                                freq_drink == 8 ~ "Regular",
-                                freq_drink == 9 ~ "Everyday",
-                                TRUE ~ as.factor(freq_drink)),
-         freq_drink = factor(freq_drink, c("Never", "Occasional", "Regular", "Everyday"))) %>% 
-  mutate(freq_farming = case_when(freq_farming == 1 ~ "Never",
-                                  freq_farming == 2 ~ "Occasional",
-                                  freq_farming == 3 ~ "Occasional",
-                                  freq_farming == 4 ~ "Regular",
-                                  freq_farming == 5 ~ "Everyday",
-                                  TRUE ~ as.factor(freq_farming)),
-         freq_farming = factor(freq_farming, c("Never", "Occasional", "Regular", "Everyday"))) %>% 
-  mutate(freq_exercising = case_when(freq_exercising == 1 ~ "Never",
-                                     freq_exercising == 2 ~ "Occasional",
-                                     freq_exercising == 3 ~ "Occasional",
-                                     freq_exercising == 4 ~ "Regular",
-                                     freq_exercising == 5 ~ "Everyday",
-                                     TRUE ~ as.factor(freq_exercising)),
-         freq_exercising = factor(freq_exercising, c("Never", "Occasional", "Regular", "Everyday")))
+    occ = case_when(
+     occupation == 1 ~ "Agriculture",
+     occupation %in% c(2,11,12) ~ "Manual",
+     occupation %in% c(3:5) ~ "Non-manual",
+     occupation %in% c(6:10) ~ "Other"),
+    occ = factor(occ, levels = c("Agriculture", 
+      "Manual", "Non-manual", "Other")),
+    ets = case_when(
+      smoking == 1 ~ "Current smoker",
+      smoking == 2 ~ "Former smoker",
+      smoking == 3 & lived_with_smoker %in% c(2,3) ~ 
+        "Never smoker lived with smoker",
+      smoking == 3 & lived_with_smoker == 1 ~ 
+        "No smoking exposure"),
+    ets = factor(ets, levels = c("Current smoker",
+      "Former smoker", "Never smoker lived with smoker",
+      "No smoking exposure")),
+    drink = case_when(
+      freq_drink == 1 ~ "Never",
+      freq_drink %in% c(2:5) ~ "Occasional",
+      freq_drink %in% c(6:8) ~ "Regular",
+      freq_drink == 9 ~ "Everyday"),
+    drink = factor(drink, levels = c("Never", 
+      "Occasional", "Regular", "Everyday")),
+    farm = case_when(
+      freq_farming == 1 ~ "Never",
+      freq_farming %in% c(2:3) ~ "Occasional",
+      freq_farming == 4 ~ "Regular",
+      freq_farming == 5 ~ "Everyday"),
+    farm = factor(farm, levels = c("Never",
+      "Occasional", "Regular", "Everyday"))) %>%
+    
+    # add dummies for categorical covariates
+    add_dummy_variables(occ, 
+      values = c(1:4), remove_original = T) %>%
+    add_dummy_variables(ets, 
+      values = c(1:4), remove_original = T) %>%
+    add_dummy_variables(drink,
+      values = c(1:4), remove_original = T) %>%
+    add_dummy_variables(farm,
+      values = c(1:4), remove_original = T) %>%
     
     # treatment related
-    year = if_else(wave==1, 2018, 
+    mutate(year = if_else(wave==1, 2018, 
       if_else(wave==2, 2019,
         if_else(wave==4, 2021, 0))),
     cohort_year = if_else(
@@ -134,6 +129,7 @@ d1 <- d %>%
                          cohort_year)) %>%
     rename(ppm25 = PM25conc_exposureugm3,
            district = ID_COUNTY) %>%
+  
   # add dummies for district
   add_dummy_variables(district,
   values = c(1,2,3,4),
@@ -153,12 +149,4 @@ d1 <- d %>%
 
 
 write_rds(d1, here("data-clean", "bhet-resp-data.rds"))
-
-
-d %>% mutate(newocc=case_when(
-    occupation == 1 ~ "agriculture",
-    occupation %in% c(2,11,12) ~ "manual",
-    occupation %in% c(3:5) ~ "non-manual",
-    occupation %in% c(6:10) ~ "other")) %>%
-  group_by(newocc) %>% tally()
 
