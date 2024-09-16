@@ -1,7 +1,14 @@
-# packages to load
+#  program:  multiple-outcomes.R
+#  task:     estimate models for respiratory outcomes
+#  input:    bhet-master
+#  output:   
+#  project:  BHET
+#  author:   sam harper \ 2024-09-16
+
+## 0  packages to load
 pkgs <- c('here', 'tidyverse', 'modelsummary', 
           'fixest', 'marginaleffects',
-          'kableExtra', 'patchwork', 'estimatr')
+          'patchwork', 'estimatr')
 
 #load all packages at once
 lapply(pkgs, library, character.only=TRUE)
@@ -38,11 +45,14 @@ rhs_did <- c("treat:cohort_year_2019:year_2019",
   "year_2019", "year_2021")
 
 rhs_dida <- c(rhs_did, "age_health", "male", 
-  "csmoke", "fsmoke")
+  "ets_2", "ets_3", "ets_4",
+  "occ_2", "occ_3", "occ_4",
+  "drink_2", "drink_3", "drink_4",
+  "farm_2", "farm_3", "farm_4")
 
 dresp_cc <- dresp %>%
   # limit to complete cases
-  drop_na(b_out, age_health, male, csmoke, fsmoke)
+  drop_na(cresp:farm_4, -bmi)
 
 # gather estimates across models
 # basic DiD
@@ -183,18 +193,6 @@ modelsummary(list("Any symptom" = logit_me$resp,
   "Chest trouble" = logit_mea$nochest),
   shape = model ~ term + statistic,
   statistic = 'conf.int')
-
-didtable <- modelsummary(list("Any" = logit_me$resp, "Cough" = logit_me$cough), shape = model ~ term + statistic,
-  statistic = 'conf.int')
-
-modelsummary(list("Any" = logit_me$resp, "Cough" = logit_me$cough), shape =  ~ "" + statistic,
-  statistic = 'conf.int')
-
-didatable <- modelsummary(list("Any" = logit_mea$resp, "Cough" = logit_mea$cough), shape = model ~ term + statistic,
-  statistic = 'conf.int')
-
-data_tables <- data.frame(good_table = didtable, 
-                          bad_table = didatable)
 
 # any respiratory outcome
 resp_het_any <- bind_rows(logit_mea$resp, 

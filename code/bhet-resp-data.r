@@ -3,7 +3,7 @@
 #  input:    bhet-master
 #  output:   
 #  project:  BHET
-#  author:   sam harper \ 2024-08-27
+#  author:   sam harper \ 2024-09-16
 
 
 ##  0 Load needed packages ----
@@ -18,12 +18,12 @@ library(modelsummary)
 
 ## download data files from OSF (data-clean component)
 # dir.create("data-clean")
-bhet_project <- osf_retrieve_node("vxur5")
-bhet_project %>%
-  osf_ls_files("Master Dataset (Seasons 1-4)",
-               pattern = "csv") %>%
-  osf_download(path = here("data-clean"),
-    conflicts = "overwrite")
+# bhet_project <- osf_retrieve_node("vxur5")
+# bhet_project %>%
+#   osf_ls_files("Master Dataset (Seasons 1-4)",
+#                pattern = "csv") %>%
+#   osf_download(path = here("data-clean"),
+#     conflicts = "overwrite")
 #
 ## set path to upload model fits to OSF
 ## code component
