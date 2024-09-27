@@ -3,7 +3,7 @@
 #  input:    bhet-master
 #  output:   
 #  project:  BHET
-#  author:   sam harper \ 2024-09-16
+#  author:   sam harper \ 2024-09-25
 
 ## 0  packages to load
 pkgs <- c('here', 'tidyverse', 'modelsummary', 

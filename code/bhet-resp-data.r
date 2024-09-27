@@ -3,7 +3,7 @@
 #  input:    bhet-master
 #  output:   
 #  project:  BHET
-#  author:   sam harper \ 2024-09-16
+#  author:   sam harper \ 2024-09-24
 
 
 ##  0 Load needed packages ----
@@ -47,10 +47,29 @@ d <- read_dta(here("data-clean",
                 lived_with_smoker, years_with_smoker,
                 height, weight, occupation,
                 freq_farming, freq_exercising,
-                freq_drink)) 
+                freq_drink))
+
+# import wealth index
+dwi <- read_csv(here("data-clean", 
+  "BHET_PCA_11Oct2023.csv"))
+
+dwi <- dwi %>%
+  group_by(wave) %>%
+  mutate(wq = as.integer(cut(wealth_index, 
+    quantile(wealth_index, 
+      probs = c(0, 0.25, 0.5, 0.75, 1), na.rm = T), 
+    labels = c(1:4), include.lowest = T))) %>%
+  ungroup() %>%
+  add_dummy_variables(wq, 
+    values=c(1:4), remove_original = F) 
+
+# add wealth index to main dataset
+d1 <- d %>% 
+  left_join(dwi, by = c("hh_id", "ptc_id", "wave"))
+
 
 # define main outcomes and covariates
-d1 <- d %>%
+d2 <- d1 %>%
   mutate(
     # total symptoms
     cresp = rowSums(across(c(freq_breath, freq_cough, 
@@ -74,47 +93,60 @@ d1 <- d %>%
     # csmoke = if_else(smoking == 1, 1, 0),
     # fsmoke = if_else(smoking == 2, 1, 0),
     bmi = weight / (height/100)^2,
+    
     occ = case_when(
      occupation == 1 ~ "Agriculture",
      occupation %in% c(2,11,12) ~ "Manual",
      occupation %in% c(3:5) ~ "Non-manual",
      occupation %in% c(6:10) ~ "Other"),
-    occ = factor(occ, levels = c("Agriculture", 
-      "Manual", "Non-manual", "Other")),
-    ets = case_when(
+   # add dummies for occupation
+    occ_2 = if_else(
+      occ=="Manual", 1, 0),
+    occ_3 = if_else(
+      occ=="Non-manual", 1, 0),
+    occ_4 = if_else(
+      occ=="Other", 1, 0),
+    
+   ets = case_when(
       smoking == 1 ~ "Current smoker",
       smoking == 2 ~ "Former smoker",
       smoking == 3 & lived_with_smoker %in% c(2,3) ~ 
         "Never smoker lived with smoker",
       smoking == 3 & lived_with_smoker == 1 ~ 
         "No smoking exposure"),
-    ets = factor(ets, levels = c("Current smoker",
-      "Former smoker", "Never smoker lived with smoker",
-      "No smoking exposure")),
-    drink = case_when(
+    # add dummies for smoking
+    ets_2 = if_else(
+      ets=="Former smoker", 1, 0),
+    ets_3 = if_else(
+      ets=="Never smoker lived with smoker", 1, 0),
+    ets_4 = if_else(
+      ets=="No smoking exposure", 1, 0),
+    
+   drink = case_when(
       freq_drink == 1 ~ "Never",
       freq_drink %in% c(2:5) ~ "Occasional",
       freq_drink %in% c(6:8) ~ "Regular",
       freq_drink == 9 ~ "Everyday"),
-    drink = factor(drink, levels = c("Never", 
-      "Occasional", "Regular", "Everyday")),
+    # add dummies for drinking
+    drink_2 = if_else(
+      drink=="Occasional", 1, 0),
+    drink_3 = if_else(
+      drink=="Regular", 1, 0),
+    drink_4 = if_else(
+      drink=="Everyday", 1, 0),
+    
     farm = case_when(
       freq_farming == 1 ~ "Never",
       freq_farming %in% c(2:3) ~ "Occasional",
       freq_farming == 4 ~ "Regular",
       freq_farming == 5 ~ "Everyday"),
-    farm = factor(farm, levels = c("Never",
-      "Occasional", "Regular", "Everyday"))) %>%
-    
-    # add dummies for categorical covariates
-    add_dummy_variables(occ, 
-      values = c(1:4), remove_original = T) %>%
-    add_dummy_variables(ets, 
-      values = c(1:4), remove_original = T) %>%
-    add_dummy_variables(drink,
-      values = c(1:4), remove_original = T) %>%
-    add_dummy_variables(farm,
-      values = c(1:4), remove_original = T) %>%
+    # add dummies for farming
+    farm_2 = if_else(
+      farm=="Occasional", 1, 0),
+    farm_3 = if_else(
+      farm=="Regular", 1, 0),
+    farm_4 = if_else(
+      farm=="Everyday", 1, 0)) %>%
     
     # treatment related
     mutate(year = if_else(wave==1, 2018, 
@@ -148,5 +180,5 @@ d1 <- d %>%
   ungroup()
 
 
-write_rds(d1, here("data-clean", "bhet-resp-data.rds"))
+write_rds(d2, here("data-clean", "bhet-resp-data.rds"))
 
