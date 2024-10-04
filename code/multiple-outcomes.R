@@ -13,11 +13,16 @@ pkgs <- c('here', 'tidyverse', 'modelsummary',
 #load all packages at once
 lapply(pkgs, library, character.only=TRUE)
 
+
+
 ## 1 Read in dataset, limit to resp vars ----
 dresp <- read_rds(here("data-clean", 
   "bhet-resp-data.rds")) 
 
-## 2 Estimate DD across several binary outcomes
+
+
+## 2 Function to run models, 
+# estimate marginal effects ----
 
 # Function to estimate GLM for multiple outcomes
 estimate_logit_did <- function(outcome_vars, predictor_vars) {
@@ -31,6 +36,9 @@ estimate_logit_did <- function(outcome_vars, predictor_vars) {
   
   return(models)
 }
+
+
+## 3 Run models ----
 
 # binary outcomes
 b_out <- c("resp", "cough", "phlegm", "wheeze",
@@ -51,10 +59,13 @@ rhs_dida <- c(rhs_did, "age_health", "male",
   "farm_2", "farm_3", "farm_4")
 
 dresp_cc <- dresp %>%
-  # limit to complete cases
+  # limit to complete cases (ignoring bmi)
   drop_na(cresp:farm_4, -bmi)
 
-# gather estimates across models
+
+
+## 4 gather estimates across models ----
+
 # basic DiD
 logit_did <- estimate_logit_did(b_out, rhs_did)
 write_rds(logit_did, file = here(
@@ -64,7 +75,7 @@ write_rds(logit_did, file = here(
 logit_dida <- estimate_logit_did(b_out, rhs_dida)
 
 # estimate marginal effects (simple average)
-# basic DiD
+# from the basic DiD
 logit_me <- lapply(logit_did, marginaleffects::slopes, 
   newdata = subset(dresp, treat==1), 
   variables = "treat", by = "treat",
@@ -82,7 +93,7 @@ logit_me_het <- lapply(logit_did,
   # make sure to use cluster-robust SEs
   vcov = ~v_id)
 
-# adjusted DiD
+# from the adjusted DiD
 logit_mea <- lapply(logit_dida, marginaleffects::slopes, 
   newdata = subset(dresp, treat==1), 
   variables = "treat", by = "treat",
@@ -124,6 +135,9 @@ het_tests <- setNames(lapply(b_out,
 write_rds(het_tests, file = here("outputs/models",
   "r_het_tests.rds"))
 
+
+## 5 Create tables ----
+
 # grab estimates and SEs from DiD results
 did_t1 <- logit_me %>% {
   tibble(
@@ -146,6 +160,7 @@ did_obs <- logit_did %>% {
   )
 }
 
+# add observations to table
 did_t1 <- did_t1 %>%
   inner_join(did_obs) %>%
   relocate(outcome, nobs)
@@ -164,6 +179,7 @@ did_t2 <- logit_mea %>% {
   )
 }
 
+# put basic and adjusted DiD results together
 didt <- cbind(did_t1, did_t2) %>%
   dplyr::select(nobs, est, ci, esta, cia) %>%
   mutate(outcome = c("Any symptom", "Coughing",
@@ -180,7 +196,7 @@ didt <- cbind(did_t1, did_t2) %>%
 write_rds(didt, file = here("data-clean", 
   "resp-did.rds"))
 
-# table of marginal effects
+# Example table of marginal effects
 modelsummary(list("Any symptom" = logit_me$resp,
   "Cough" = logit_me$cough, "Phlegm" = logit_me$phlegm,
   "Wheezing" = logit_me$wheeze,
@@ -194,125 +210,39 @@ modelsummary(list("Any symptom" = logit_me$resp,
   shape = model ~ term + statistic,
   statistic = 'conf.int')
 
-# any respiratory outcome
-resp_het_any <- bind_rows(logit_mea$resp, 
-                          logit_mea_het$resp) %>% 
-  mutate(outcome = "resp") %>%
-  select(outcome, estimate, conf.low, conf.high, 
-         cohort_year, year) %>%
-  mutate_at(vars(c(cohort_year,year)), ~ recode(., 
-         `2019` = "2019",
-         `2020` = "2020",
-         `2021` = "2021",
-         .missing = "All")) %>%
-  relocate(outcome, cohort_year, year) %>%
-  mutate(ci = paste("(", sprintf('%.2f', conf.low), ", ",
-    sprintf('%.2f', conf.high), ")", sep="")) %>%
-  select(-conf.low, -conf.high) 
 
-# write table to data
-write_rds(resp_het_any, file = here("outputs", 
-  "resp-het-resp.rds"))
+## 6 Create heterogeneity tables by outcome ----
+##   based on adjusted DiD results
 
-# heterogeneity table for any respiratory outcome
+# Define a function to process 
+# each outcome and write to file
+each_outcome <- function(outcome) {
+  result <- bind_rows(logit_mea[[outcome]],
+              logit_mea_het[[outcome]]) %>%
+    mutate(outcome = outcome) %>%
+    select(outcome, estimate, conf.low, conf.high, 
+           cohort_year, year) %>%
+    mutate_at(vars(c(cohort_year, year)), ~ recode(., 
+           `2019` = "2019",
+           `2020` = "2020",
+           `2021` = "2021",
+           .missing = "All")) %>%
+    relocate(outcome, cohort_year, year) %>%
+    mutate(ci = paste("(", sprintf('%.1f', conf.low), ", ",
+      sprintf('%.1f', conf.high), ")", sep="")) %>%
+    select(-conf.low, -conf.high)
+  
+  # Write the result to an .rds file
+  write_rds(result, file = here("outputs", 
+    paste0("resp-het-", outcome, ".rds")))
+  
+  return(result)  # Return the result if you want to store it in memory as well
+}
 
-# cough
-resp_het_cough <- bind_rows(logit_mea$cough, 
-                          logit_mea_het$cough) %>% 
-  mutate(outcome = "cough") %>%
-  select(outcome, estimate, conf.low, conf.high, 
-         cohort_year, year) %>%
-  mutate_at(vars(c(cohort_year,year)), ~ recode(., 
-         `2019` = "2019",
-         `2020` = "2020",
-         `2021` = "2021",
-         .missing = "All")) %>%
-  relocate(outcome, cohort_year, year) %>%
-  mutate(ci = paste("(", sprintf('%.2f', conf.low), ", ",
-    sprintf('%.2f', conf.high), ")", sep="")) %>%
-  select(-conf.low, -conf.high) 
+# Restate list of outcomes
+b_out <- c("resp", "cough", "phlegm", 
+           "wheeze", "breath", "nochest")
 
-# write table to data
-write_rds(resp_het_cough, file = here("outputs", 
-  "resp-het-cough.rds"))
+# Apply the function across all outcomes and store results in a list (optional)
+result_list <- lapply(b_out, each_outcome)
 
-# phlegm
-resp_het_phlegm <- bind_rows(logit_mea$phlegm, 
-                          logit_mea_het$phlegm) %>% 
-  mutate(outcome = "phlegm") %>%
-  select(outcome, estimate, conf.low, conf.high, 
-         cohort_year, year) %>%
-  mutate_at(vars(c(cohort_year,year)), ~ recode(., 
-         `2019` = "2019",
-         `2020` = "2020",
-         `2021` = "2021",
-         .missing = "All")) %>%
-  relocate(outcome, cohort_year, year) %>%
-  mutate(ci = paste("(", sprintf('%.2f', conf.low), ", ",
-    sprintf('%.2f', conf.high), ")", sep="")) %>%
-  select(-conf.low, -conf.high) 
-
-# write table to data
-write_rds(resp_het_phlegm, file = here("outputs", 
-  "resp-het-phlegm.rds"))
-
-
-# wheeze
-resp_het_wheeze <- bind_rows(logit_mea$wheeze, 
-                          logit_mea_het$wheeze) %>% 
-  mutate(outcome = "wheeze") %>%
-  select(outcome, estimate, conf.low, conf.high, 
-         cohort_year, year) %>%
-  mutate_at(vars(c(cohort_year,year)), ~ recode(., 
-         `2019` = "2019",
-         `2020` = "2020",
-         `2021` = "2021",
-         .missing = "All")) %>%
-  relocate(outcome, cohort_year, year) %>%
-  mutate(ci = paste("(", sprintf('%.2f', conf.low), ", ",
-    sprintf('%.2f', conf.high), ")", sep="")) %>%
-  select(-conf.low, -conf.high) 
-
-# write table to data
-write_rds(resp_het_wheeze, file = here("outputs", 
-  "resp-het-wheeze.rds"))
-
-# shortness of breah
-resp_het_breath <- bind_rows(logit_mea$breath, 
-                          logit_mea_het$breath) %>% 
-  mutate(outcome = "breath") %>%
-  select(outcome, estimate, conf.low, conf.high, 
-         cohort_year, year) %>%
-  mutate_at(vars(c(cohort_year,year)), ~ recode(., 
-         `2019` = "2019",
-         `2020` = "2020",
-         `2021` = "2021",
-         .missing = "All")) %>%
-  relocate(outcome, cohort_year, year) %>%
-  mutate(ci = paste("(", sprintf('%.2f', conf.low), ", ",
-    sprintf('%.2f', conf.high), ")", sep="")) %>%
-  select(-conf.low, -conf.high) 
-
-# write table to data
-write_rds(resp_het_breath, file = here("outputs", 
-  "resp-het-breath.rds"))
-
-# no chest trouble
-resp_het_nochest <- bind_rows(logit_mea$nochest, 
-                          logit_mea_het$nochest) %>% 
-  mutate(outcome = "chest") %>%
-  select(outcome, estimate, conf.low, conf.high, 
-         cohort_year, year) %>%
-  mutate_at(vars(c(cohort_year,year)), ~ recode(., 
-         `2019` = "2019",
-         `2020` = "2020",
-         `2021` = "2021",
-         .missing = "All")) %>%
-  relocate(outcome, cohort_year, year) %>%
-  mutate(ci = paste("(", sprintf('%.2f', conf.low), ", ",
-    sprintf('%.2f', conf.high), ")", sep="")) %>%
-  select(-conf.low, -conf.high) 
-
-# write table to data
-write_rds(resp_het_nochest, file = here("outputs", 
-  "resp-het-nochest.rds"))
