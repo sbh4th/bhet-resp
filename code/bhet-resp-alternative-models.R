@@ -9,7 +9,8 @@
 pkgs <- c('here', 'tidyverse', 'modelsummary', 
           'fixest', 'marginaleffects',
           'patchwork', 'estimatr',
-          'MASS', 'nnet', 'modeldb')
+          'MASS', 'nnet', 'modeldb',
+          'tinytable')
 
 #load all packages at once
 lapply(pkgs, library, character.only=TRUE)
@@ -191,115 +192,138 @@ d2 <- d2 %>%
     all_of(names(labels_list)),
     ~ {
       var <- cur_column()
-      f <- factor(.x,
+      f <- factor(.x, ordered = TRUE,
                   levels = seq_along(labels_list[[var]]),
                   labels = labels_list[[var]])
     }
   ))
 
-# set reference levels
-ref_levels <- list(
-  freq_cough    = 4,
-  freq_phlegm   = 4,
-  freq_no_chest = 4,
-  freq_breath   = 3,
-  freq_wheezing = 5
-)
 
-d2 <- d2 %>%
+## 2 Function to run models, 
+# estimate marginal effects ----
+
+# Function to estimate ordered logit for multiple outcomes
+estimate_ologit_did <- function(outcome_vars, predictor_vars) {
+  models <- outcome_vars %>%
+    set_names() %>%
+    map(~ {
+      formula <- as.formula(paste(.x, "~", 
+        paste(predictor_vars, collapse = " + ")))
+      polr(formula, data = dresp_cc, Hess = TRUE)
+    })
+  
+  return(models)
+}
+
+
+## 3 Run models ----
+
+# binary outcomes
+b_ord_out <- c("freq_cough", "freq_phlegm", 
+  "freq_wheezing", "freq_breath", "freq_no_chest")
+
+# basic DiD specification with fixed effects
+# for cohort and year
+rhs_did <- c("treat:cohort_year_2019:year_2019",
+             "treat:cohort_year_2019:year_2021", 
+             "treat:cohort_year_2020:year_2021",
+             "treat:cohort_year_2021:year_2021", "cohort_year_2019",
+             "cohort_year_2020", "cohort_year_2021",
+             "year_2019", "year_2021")
+
+dresp_cc <- d2 %>%
+  # limit to complete cases (ignoring bmi)
+  drop_na(cresp:farm_4, -bmi)
+
+
+
+## gather estimates across models ----
+## and write results to outputs folder
+
+# basic DiD
+ologit_did <- estimate_ologit_did(b_ord_out, rhs_did)
+write_rds(ologit_did, file = here(
+  "outputs/ologit-did.rds"))
+
+# estimate marginal predictions (simple average)
+ologit_mp <- lapply(ologit_did, 
+  marginaleffects::avg_predictions, 
+  newdata = subset(dresp_cc, treat==1), 
+  variables = "treat", by = "treat",
+  # make sure to use cluster-robust SEs
+  vcov = ~v_id)
+write_rds(ologit_mp, file = here(
+  "outputs/ologit-mp.rds"))
+
+# estimate marginal effects (simple average)
+# from the basic DiD
+ologit_me <- lapply(ologit_did, 
+  marginaleffects::slopes, 
+  newdata = subset(dresp_cc, treat==1), 
+  variables = "treat", by = "treat",
+  # make sure to use cluster-robust SEs
+  vcov = ~v_id)
+write_rds(ologit_me, file = here(
+  "outputs/logit-me.rds"))
+
+
+# grab estimates and SEs from DiD results
+ologit_tab1 <- bind_rows(ologit_mp,
+  .id = "outcome") %>%
   mutate(
-    across(
-      all_of(names(ref_levels)),
-      ~ relevel(as.factor(.x, ordered = TRUE), 
-                ref = ref_levels[[cur_column()]])
-    )
-  )
-
-o_cough <- polr(
-  freq_cough ~ treat:cohort_year_2019:year_2019 + 
-    treat:cohort_year_2019:year_2021 + 
-    treat:cohort_year_2020:year_2021 + 
-    treat:cohort_year_2021:year_2021 + 
-    cohort_year_2019 + cohort_year_2020 + 
-    cohort_year_2021 + year_2019 + year_2021, 
-  data = d2, Hess = TRUE)
-
-o_cough_mp <- marginaleffects::avg_predictions(
-  o_cough, 
-  newdata = subset(d2, treat==1), 
-  var = "treat", vcov = ~v_id)
-
-o_cough_me <- marginaleffects::avg_slopes(
-  o_cough, 
-  newdata = subset(d2, treat==1), 
-  var = "treat", vcov = ~v_id)
+    category = group,
+    treat = treat,
+    est = estimate * 100,
+    se = std.error * 100,
+    ll = est - 1.96 * se,
+    ul = est + 1.96 * se,
+    ci = paste("(", sprintf('%.1f', ll), ", ",
+    sprintf('%.1f', ul), ")", sep="")) %>%
+  
+  # keep relevant columns
+  dplyr::select(outcome, category, 
+    treat, est, ci) %>%
+  
+  # reshape exposure to wide
+  pivot_wider(names_from = "treat",
+    values_from = c("est", "ci"),
+    names_vary = "slowest")
 
 
+ologit_tab2 <- bind_rows(ologit_me,
+  .id = "outcome") %>%
+  mutate(
+    category = group,
+    est = estimate * 100,
+    se = std.error * 100,
+    ll = est - 1.96 * se,
+    ul = est + 1.96 * se,
+    ci = paste("(", sprintf('%.1f', ll), ", ",
+      sprintf('%.1f', ul), ")", sep="")) %>%
+  
+    # keep relevant columns
+  dplyr::select(outcome, category, 
+    est, ci) 
 
-o_phlegm <- polr(
-  freq_phlegm ~ treat:cohort_year_2019:year_2019 + 
-    treat:cohort_year_2019:year_2021 + 
-    treat:cohort_year_2020:year_2021 + 
-    treat:cohort_year_2021:year_2021 + 
-    cohort_year_2019 + cohort_year_2020 + 
-    cohort_year_2021 + year_2019 + year_2021, 
-  data = d2, Hess = TRUE)
+ologit_table <- ologit_tab1 %>%
+  left_join(ologit_tab2, join_by(outcome, category)) %>%
+  mutate(across(c(est_0, est_1, est), ~ round(.x, 1))) %>%
+  dplyr::select(-outcome)
 
-o_phlegm_mp <- marginaleffects::avg_predictions(
-  o_phlegm, 
-  newdata = subset(d2, treat==1), 
-  var = "treat", vcov = ~v_id)
+colnames(ologit_table) <- c("Category", "%", "(95% CI)", 
+  "%", "95% CI", "ATT (%)", "95% CI")
 
-o_phlegm_me <- marginaleffects::avg_slopes(
-  o_phlegm, 
-  newdata = subset(d2, treat==1), 
-  var = "treat", vcov = ~v_id)
+tt(ologit_table,
+   notes = "Note: Average marginal predictions and ATT from ETWFE ordered logit models without covariates.") %>%
+  group_tt(
+    j = list("Treated" = 2:3, 
+             "Untreated" = 4:5,
+             "Difference" = 6:7),
+    i = list("Frequency of coughing" = 1,
+             "Frequency of phlegm" = 5,
+             "Frequency of wheezing" = 9,
+             "Frequency of trouble breathing" = 14,
+             "Frequency of days with little chest trouble" = 17)) |>
+  style_tt(i = c(1, 6, 11, 17, 21), align = "l", italic=T) 
 
-o_wheeze <- polr(
-  freq_wheezing ~ treat:cohort_year_2019:year_2019 + 
-    treat:cohort_year_2019:year_2021 + 
-    treat:cohort_year_2020:year_2021 + 
-    treat:cohort_year_2021:year_2021 + 
-    cohort_year_2019 + cohort_year_2020 + 
-    cohort_year_2021 + year_2019 + year_2021, 
-  data = d2, Hess = TRUE)
-
-o_wheeze_mp <- marginaleffects::avg_predictions(
-  o_wheeze, 
-  newdata = subset(d2, treat==1), 
-  var = "treat", vcov = ~v_id)
-
-o_wheeze_me <- marginaleffects::avg_slopes(
-  o_wheeze, 
-  newdata = subset(d2, treat==1), 
-  var = "treat", vcov = ~v_id)
-
-mn_wheeze <- multinom(
-  freq_wheezing ~ treat:cohort_year_2019:year_2019 + treat:cohort_year_2019:year_2021 + treat:cohort_year_2020:year_2021 + treat:cohort_year_2021:year_2021 + cohort_year_2019 + cohort_year_2020 + cohort_year_2021 + year_2019 + year_2021, data = d2, Hess = TRUE)
-
-
-o_nochest <- polr(
-  freq_no_chest ~ treat:cohort_year_2019:year_2019 + 
-    treat:cohort_year_2019:year_2021 + 
-    treat:cohort_year_2020:year_2021 + 
-    treat:cohort_year_2021:year_2021 + 
-    cohort_year_2019 + cohort_year_2020 + 
-    cohort_year_2021 + year_2019 + year_2021, 
-  data = d2, Hess = TRUE)
-
-o_nochest_mp <- marginaleffects::avg_predictions(
-  o_nochest, 
-  newdata = subset(d2, treat==1), 
-  var = "treat", vcov = ~v_id)
-
-o_nochest_me <- marginaleffects::avg_slopes(
-  o_nochest, 
-  newdata = subset(d2, treat==1), 
-  var = "treat", vcov = ~v_id)
-
-
-mn_breath <- multinom(
-  freq_breath ~ treat:cohort_year_2019:year_2019 + treat:cohort_year_2019:year_2021 + treat:cohort_year_2020:year_2021 + treat:cohort_year_2021:year_2021 + cohort_year_2019 + cohort_year_2020 + cohort_year_2021 + year_2019 + year_2021, data = d2, Hess = TRUE)
-
-o_breath <- polr(
-  freq_breath ~ treat:cohort_year_2019:year_2019 + treat:cohort_year_2019:year_2021 + treat:cohort_year_2020:year_2021 + treat:cohort_year_2021:year_2021 + cohort_year_2019 + cohort_year_2020 + cohort_year_2021 + year_2019 + year_2021, data = d2, Hess = TRUE)
+  
