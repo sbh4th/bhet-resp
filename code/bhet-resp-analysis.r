@@ -132,12 +132,12 @@ d2 <- d1 %>%
 b1 <-
   brm(data = d2, 
       family = bernoulli(),
-      resp ~ 1 + (1 | v_id),
+      noresp ~ 1 + (1 | v_id),
       prior = c(prior(normal(0, 1), class = Intercept), 
                 prior(exponential(1), class = sd)),        
       iter = 2000, warmup = 1000, chains = 4, cores = 4,
       sample_prior = "yes",
-      seed = 287,
+      seed = 287)
       file = "code/fits/bhet-resp-b1")
 
 ## check the chains
@@ -157,7 +157,7 @@ prior_draws(b1) %>%
 b2 <-
   brm(data = d2, 
       family = bernoulli(),
-      resp ~ 1 + (1 | v_id) + 
+      noresp ~ 1 + (1 | v_id) + 
         treat:cohort_year_2019:year_2019 + 
         treat:cohort_year_2019:year_2021 +
         treat:cohort_year_2020:year_2021 +
@@ -169,7 +169,7 @@ b2 <-
         prior(exponential(1), class = sd)),
       iter = 2000, warmup = 1000, chains = 4, cores = 4,
       sample_prior = "yes", 
-      seed = 3975,
+      seed = 3975)
       file = "code/fits/bhet-resp-b2")
 
 ## check the chains
@@ -444,3 +444,21 @@ me <- mpp %>%
   mutate(diff = `Treated` - `Control`) %>%
   median_hdi(diff, .width = 0.95) 
 me
+
+
+b3 <-
+  brm(data = d2, 
+      family = bernoulli(),
+      noresp ~ 1 + (1 | v_id) + 
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021,
+      prior = c(prior(normal(0, 1), class = Intercept),
+        prior(normal(0, 1), class = b),
+        prior(exponential(1), class = sd)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = "yes", 
+      seed = 3975)

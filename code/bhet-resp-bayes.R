@@ -2,13 +2,79 @@ bc1 <-
   brm(data = d2,
       family = poisson(),
       cresp | trunc(ub = 20) ~ 1 + (1 | v_id),
-      prior = c(prior(normal(0, 3), class = Intercept),
+      prior = c(prior(normal(2.5, 0.25), class = Intercept),
                 prior(exponential(1), class = sd)),
-      iter = 200, warmup = 1000, chains = 4, cores = 4,
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
       sample_prior = "yes",
-      seed = 2037,
+      seed = 247)
       file = "code/fits/bhet-cresp-bc1")
 
+## check the chains
+mcmc_trace(bc1, pars="b_Intercept") +
+  theme_classic() + ylab("")
+
+## visualize prior draws on absolute scale
+prior_draws(bc1) %>%
+  # rescale to absolute probabilities
+  mutate(p1_c = exp(Intercept)) %>%
+  ggplot(aes(x = p1_c)) + 
+    stat_halfeye(color= "black", fill =  '#1b9e77') +
+    labs(x = "Number of symptoms", 
+      y = NULL, subtitle = "") +
+  theme_classic()
+
+bc2 <-
+  brm(data = d2,
+      family = poisson(),
+      cresp | trunc(ub = 20) ~ 1 + (1 | v_id) +
+        treat:cohort_year_2019:year_2019 + 
+        treat:cohort_year_2019:year_2021 +
+        treat:cohort_year_2020:year_2021 +
+        treat:cohort_year_2021:year_2021 +
+        cohort_year_2019 + cohort_year_2020 +
+        cohort_year_2021 + year_2019 + year_2021,
+      prior = c(prior(normal(2.5, 0.25), class = Intercept),
+                prior(normal(0, 1), class = b),
+                prior(exponential(1), class = sd)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = "yes",
+      seed = 4796)
+
+threshold <- 15  # Change to any cutoff you want
+
+pr_y_below_threshold <- function(eta, ...) {
+    lambda <- exp(eta)  # Convert linear predictor to Poisson mean
+    return(ppois(threshold - 1, lambda = lambda))  # P(Y < 12)
+}
+
+pred_probs <- predictions(bc2,
+                          newdata = subset(d2, treat==1),
+                          variables = "treat",
+                          by = "treat",
+                          type = "link",
+                          predict = pr_y_below_threshold)
+
+## visualize prior draws for treatment effects
+prior_draws(bc2) %>%
+  # rescale to absolute probabilities
+  mutate(p1_c0 = exp(Intercept),
+         p1_c1 = exp(Intercept + b)) %>%
+  # treatment effect
+  mutate(diff = p1_c0 - p1_c1) %>%
+  ggplot(aes(x = diff)) + 
+    stat_halfeye(color= "black", fill =  '#1b9e77') +
+    labs(x = "Difference in number of symptoms", 
+      y = NULL, subtitle = "") +
+  theme_classic()
+
+## check the chains
+mcmc_trace(bc2, pars=c("b_Intercept", "b_year_2021")) +
+  theme_classic() + ylab("")
+
+print(bc2)
+
+predictions(bc2, newdata = subset(d2, treat==1), 
+  variables = "treat", by = "treat")
 
 b1 <-
   brm(data = d2, 
@@ -184,7 +250,7 @@ class(betwfe_me_avg) <- "modelsummary_list"
 library(etwfe)
 library(fixest)
 
-fm <- glm(resp ~  
+fm <- glm(noresp ~  
         treat:cohort_year_2019:year_2019 + 
         treat:cohort_year_2019:year_2021 +
         treat:cohort_year_2020:year_2021 +
@@ -307,8 +373,8 @@ mf_1 <- d2 %>%
 mf_me <- bind_rows(mf_0, mf_1)
 
 # marginal predicted risks
-mpp <- add_epred_draws(b2, newdata=mf_me,
-    allow_new_levels = TRUE, seed = 294) %>%
+mpp <- add_epred_draws(bc2, newdata=mf_me,
+    allow_new_levels = TRUE, seed = 294, ndraws=100) %>%
     mutate(Tx = recode_factor(treat, 
       `0` = "Control", `1` = "Treated")) %>%
   group_by(Tx, .draw) %>%

@@ -219,7 +219,10 @@ modelsummary(list("Any symptom" = logit_me$resp,
 each_outcome <- function(outcome) {
   result <- bind_rows(logit_mea[[outcome]],
               logit_mea_het[[outcome]]) %>%
-    mutate(outcome = outcome) %>%
+    mutate(outcome = outcome,
+           estimate = estimate * 100,
+           conf.low = conf.low * 100,
+           conf.high = conf.high * 100) %>%
     select(outcome, estimate, conf.low, conf.high, 
            cohort_year, year) %>%
     mutate_at(vars(c(cohort_year, year)), ~ recode(., 

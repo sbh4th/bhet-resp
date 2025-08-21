@@ -54,6 +54,11 @@ d2 <- d %>% mutate(
   nosym = if_else(freq_cough==4 & freq_phlegm==4 & 
     freq_no_chest==4 & freq_breath==3 & 
     freq_wheezing==5, 1, 0),
+  no_cough = if_else(freq_cough==4, 1, 0),
+  no_phlegm = if_else(freq_phlegm==4, 1, 0),
+  no_wheeze = if_else(freq_wheezing==5, 1, 0),
+  no_breath = if_else(freq_breath==3, 1, 0),
+  no_nochest = if_else(freq_no_chest==4, 1, 0),
   
   # change symptoms to factors
 #  across(c("freq_breath", "freq_cough", "freq_phlegm",
@@ -326,4 +331,83 @@ tt(ologit_table,
              "Frequency of days with little chest trouble" = 17)) |>
   style_tt(i = c(1, 6, 11, 17, 21), align = "l", italic=T) 
 
+# Now for binary "best" outcomes
+# Function to estimate GLM for multiple outcomes
+estimate_logit_did <- function(outcome_vars, predictor_vars) {
+  models <- outcome_vars %>%
+    set_names() %>%
+    map(~ {
+      formula <- as.formula(paste(.x, "~", 
+        paste(predictor_vars, collapse = " + ")))
+      glm(formula, data = dresp_cc, family = "binomial")
+    })
   
+  return(models)
+}
+
+
+## 3 Run models ----
+
+# binary outcomes
+b_out_no <- c("nosym", "no_cough", "no_phlegm", 
+  "no_wheeze", "no_breath", "no_nochest")
+
+# basic DiD specification with fixed effects
+# for cohort and year
+rhs_did <- c("treat:cohort_year_2019:year_2019",
+  "treat:cohort_year_2019:year_2021", 
+  "treat:cohort_year_2020:year_2021",
+  "treat:cohort_year_2021:year_2021", "cohort_year_2019",
+  "cohort_year_2020", "cohort_year_2021",
+  "year_2019", "year_2021")
+
+dresp_cc <- d2 %>%
+  # limit to complete cases (ignoring bmi)
+  drop_na(cresp:farm_4, -bmi)
+
+## gather estimates across models ----
+## and write results to outputs folder
+
+# basic DiD
+logit_did_none <- estimate_logit_did(b_out_no, rhs_did)
+write_rds(logit_did_none, file = here(
+  "outputs/logit-did_none.rds"))
+
+# estimate marginal effects (simple average)
+# from the basic DiD
+logit_me_none <- lapply(logit_did_none, 
+  marginaleffects::slopes, 
+  newdata = subset(dresp_cc, treat==1), 
+  variables = "treat", by = "treat",
+  # make sure to use cluster-robust SEs
+  vcov = ~v_id)
+write_rds(logit_me_none, file = here(
+  "outputs/logit-me_none.rds"))
+
+## create tables ----
+
+# grab estimates and SEs from DiD results
+did_t1_no <- bind_rows(logit_me_none,
+  .id = "outcome") %>%
+  mutate(
+    est = estimate * 100,
+    se = std.error * 100,
+    ll = est - 1.96 * se,
+    ul = est + 1.96 * se,
+    ci = paste("(", sprintf('%.1f', ll), ", ",
+    sprintf('%.1f', ul), ")", sep="")) %>%
+  
+  # keep relevant columns
+  dplyr::select(est, ci) %>%
+  mutate(
+    outcome = c("No symptoms", "No coughing",
+    "No phlegm", "No wheezing", "No trouble breathing",
+    "No chest trouble"),
+    est = round(est, 1)) %>%
+  relocate(outcome, est, ci)
+
+colnames(did_t1_no) <- c("Outcome", 
+  "ATT (%)", "95% CI")
+
+tt(did_t1_no,
+   notes = "Note: Average marginal effects (ATT) from ETWFE models without covariates.")

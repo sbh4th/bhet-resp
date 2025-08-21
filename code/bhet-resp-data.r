@@ -82,16 +82,20 @@ d2 <- d1 %>%
     breath = if_else(freq_breath < 3, 1, 0),
     nochest = if_else(freq_no_chest < 3, 1, 0),
     resp = if_else(
-    freq_cough < 3 |
-    freq_phlegm < 3 |
-    freq_wheezing < 3 |
-    freq_breath < 3 |
-    freq_no_chest < 3, 1, 0),
+      freq_cough < 3 |
+      freq_phlegm < 3 |
+      freq_wheezing < 3 |
+      freq_breath < 3 |
+      freq_no_chest < 3, 1, 0),
+    noresp = if_else(
+      freq_cough == 4 &
+      freq_phlegm == 4 &
+      freq_wheezing == 5 &
+      freq_breath == 3 &
+      freq_no_chest == 4, 1, 0),
     
     # covariates
     male = if_else(gender_health == 1, 1, 0),
-    # csmoke = if_else(smoking == 1, 1, 0),
-    # fsmoke = if_else(smoking == 2, 1, 0),
     bmi = weight / (height/100)^2,
     
     occ = case_when(
