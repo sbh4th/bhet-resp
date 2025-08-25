@@ -9,7 +9,7 @@
 pkgs <- c('here', 'tidyverse', 'modelsummary', 
           'fixest', 'marginaleffects',
           'patchwork', 'estimatr',
-          'MASS', 'nnet', 'modeldb',
+          'MASS', 'modeldb',
           'tinytable')
 
 #load all packages at once
@@ -32,7 +32,8 @@ d <- read_csv(here("data-clean",
                             lived_with_smoker, years_with_smoker,
                             height, weight, occupation,
                             freq_farming, freq_exercising,
-                            freq_drink))
+                            freq_drink,
+                            noise_traffic, noise_animals))
 
 d2 <- d %>% mutate(
   # total symptoms

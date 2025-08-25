@@ -75,9 +75,7 @@ me_esm_pre <-
 
 # can test here whether all pre-treatment 
 # effects are zero
-hypotheses(esm_pre, 
-  "b1 + b2 = 0")
-
+hypotheses(me_esm_pre, joint = TRUE)
 
 ## 4 make the plot
 
