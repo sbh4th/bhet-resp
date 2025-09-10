@@ -33,7 +33,8 @@ d <- read_csv(here("data-clean",
                             height, weight, occupation,
                             freq_farming, freq_exercising,
                             freq_drink,
-                            noise_traffic, noise_animals))
+                            noise_traffic, noise_animals,
+                            health_selfreport))
 
 d2 <- d %>% mutate(
   # total symptoms
@@ -190,7 +191,24 @@ labels_list <- list(
   freq_no_chest = c("No good days",
                     "A few good days",
                     "Most days are good",
-                    "Every day is good")
+                    "Every day is good"),
+  
+  noise_traffic = c("Not at all",
+                    "Slightly",
+                    "Moderately",
+                    "Very",
+                    "Extremely"),
+  
+  noise_animals = c("Not at all",
+                    "Slightly",
+                    "Moderately",
+                    "Very",
+                    "Extremely"),
+  
+  health_selfreport = c("Excellent",
+                        "Good",
+                        "Fair",
+                        "Poor")
 )
 
 d2 <- d2 %>%
