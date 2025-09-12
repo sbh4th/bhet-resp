@@ -124,16 +124,19 @@ d2 <- d %>% mutate(
   farm_3 = if_else(
     farm=="Regular", 1, 0),
   farm_4 = if_else(
-    farm=="Everyday", 1, 0)) %>%
+    farm=="Everyday", 1, 0),
+
+  none_animal = ifelse(noise_animals==1, 1, 0),
+  none_traffic = ifelse(noise_traffic==1, 1, 0)) %>%
   
   # treatment related
   mutate(year = if_else(wave==1, 2018, 
                         if_else(wave==2, 2019,
                                 if_else(wave==4, 2021, 0))),
-         cohort_year = if_else(
-           ban_status_composite==1, 2019, 
-           if_else(ban_status_composite==2, 2020, 
-                   if_else(ban_status_composite==3, 2021, 2022))),
+  cohort_year = if_else(
+    ban_status_composite==1, 2019, 
+      if_else(ban_status_composite==2, 2020, 
+        if_else(ban_status_composite==3, 2021, 2022))),
          treat = ifelse(year >= cohort_year, 1, 0),
          cohort_year = ifelse(cohort_year == 2022,-Inf, 
                               cohort_year),
@@ -192,18 +195,6 @@ labels_list <- list(
                     "A few good days",
                     "Most days are good",
                     "Every day is good"),
-  
-  noise_traffic = c("Not at all",
-                    "Slightly",
-                    "Moderately",
-                    "Very",
-                    "Extremely"),
-  
-  noise_animals = c("Not at all",
-                    "Slightly",
-                    "Moderately",
-                    "Very",
-                    "Extremely"),
   
   health_selfreport = c("Excellent",
                         "Good",
@@ -350,6 +341,80 @@ tt(ologit_table,
              "Frequency of days with little chest trouble" = 17)) |>
   style_tt(i = c(1, 6, 11, 17, 21), align = "l", italic=T) 
 
+# self-reported health
+ologit_srh <- polr(health_selfreport ~
+  treat:cohort_year_2019:year_2019 +
+  treat:cohort_year_2019:year_2021 + 
+  treat:cohort_year_2020:year_2021 +
+  treat:cohort_year_2021:year_2021 + cohort_year_2019 +
+  cohort_year_2020 + cohort_year_2021 +
+  year_2019 + year_2021, 
+  data = dresp_cc, Hess = TRUE)
+
+srh_predictions <- avg_predictions( 
+  ologit_srh,
+  newdata = subset(dresp_cc, treat==1), 
+  variables = "treat", by = "treat",
+  vcov = ~ v_id)
+
+srh_effects <- slopes( 
+  ologit_srh,
+  newdata = subset(dresp_cc, treat==1), 
+  variables = "treat", by = "treat",
+  vcov = ~ v_id)
+
+# grab estimates and SEs from marginal predictions
+srh_tab1 <- srh_predictions %>%
+  mutate(
+    category = group,
+    treat = treat,
+    est = estimate * 100,
+    se = std.error * 100,
+    ll = est - 1.96 * se,
+    ul = est + 1.96 * se,
+    ci = paste("(", sprintf('%.1f', ll), ", ",
+    sprintf('%.1f', ul), ")", sep="")) %>%
+  
+  # keep relevant columns
+  dplyr::select(category, 
+    treat, est, ci) %>%
+  
+  # reshape exposure to wide
+  pivot_wider(names_from = "treat",
+    values_from = c("est", "ci"),
+    names_vary = "slowest")
+
+# now for marginal effects
+srh_tab2 <- srh_effects %>%
+  mutate(
+    category = group,
+    est = estimate * 100,
+    se = std.error * 100,
+    ll = est - 1.96 * se,
+    ul = est + 1.96 * se,
+    ci = paste("(", sprintf('%.1f', ll), ", ",
+      sprintf('%.1f', ul), ")", sep="")) %>%
+  
+    # keep relevant columns
+  dplyr::select(category, 
+    est, ci) 
+
+srh_table <- srh_tab1 %>%
+  left_join(srh_tab2, join_by(category)) %>%
+  mutate(across(c(est_0, est_1, est), ~ round(.x, 1)))
+
+colnames(srh_table) <- c("Category", "%", "(95% CI)", 
+  "%", "95% CI", "ATT (%)", "95% CI")
+
+tt(srh_table,
+   notes = "Note: Average marginal predictions and ATT from ETWFE ordered logit models without covariates.") %>%
+  group_tt(
+    j = list("Treated" = 2:3, 
+             "Untreated" = 4:5,
+             "Difference" = 6:7))
+
+
+
 # Now for binary "best" outcomes
 # Function to estimate GLM for multiple outcomes
 estimate_logit_did <- function(outcome_vars, predictor_vars) {
@@ -430,3 +495,65 @@ colnames(did_t1_no) <- c("Outcome",
 
 tt(did_t1_no,
    notes = "Note: Average marginal effects (ATT) from ETWFE models without covariates.")
+
+
+## Noise outcomes
+
+# basic DiD
+b_out_noise <- c("none_traffic", "none_animal")
+
+logit_did_noise <- estimate_logit_did(b_out_noise, rhs_did)
+write_rds(logit_did_noise, file = here(
+  "outputs/logit-did_noise.rds"))
+
+# estimate marginal effects (simple average)
+# from the basic DiD
+logit_me_noise <- lapply(logit_did_noise, 
+  marginaleffects::slopes, 
+  newdata = subset(dresp_cc, treat==1), 
+  variables = "treat", by = "treat",
+  # make sure to use cluster-robust SEs
+  vcov = ~v_id)
+write_rds(logit_me_noise, file = here(
+  "outputs/logit-me_noise.rds"))
+
+## create tables ----
+
+# grab estimates and SEs from DiD results
+did_t1_noise <- bind_rows(logit_me_noise,
+  .id = "outcome") %>%
+  mutate(
+    est = estimate * 100,
+    se = std.error * 100,
+    ll = est - 1.96 * se,
+    ul = est + 1.96 * se,
+    ci = paste("(", sprintf('%.1f', ll), ", ",
+    sprintf('%.1f', ul), ")", sep="")) %>%
+  
+  # keep relevant columns
+  dplyr::select(est, ci) %>%
+  mutate(
+    outcome = c("No traffic noise", 
+      "No animal noise"),
+    est = round(est, 1)) %>%
+  relocate(outcome, est, ci)
+
+colnames(did_t1_noise) <- c("Outcome", 
+  "ATT (%)", "95% CI")
+
+tt(did_t1_noise,
+   notes = "Note: Average marginal effects (ATT) from ETWFE models without covariates.")
+
+d_het <- glm(nosym ~ 
+  factor(district) * (treat:cohort_year_2019:year_2019 + 
+  treat:cohort_year_2019:year_2021 +
+  treat:cohort_year_2020:year_2021 +
+  treat:cohort_year_2021:year_2021 +
+  cohort_year_2019 + cohort_year_2020 +
+  cohort_year_2021 + year_2019 + year_2021),
+  data = dresp_cc, family = "binomial")
+
+slopes(d_het,
+  newdata = subset(dresp_cc, treat==1),
+  variables = "treat", by = c("treat", "district"),
+  vcov = ~ v_id)
